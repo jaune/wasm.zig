@@ -1,0 +1,20 @@
+.{
+    .name = "testsuite",
+    .version = "0.0.0",
+    .dependencies = .{
+        .@"github:WebAssembly/testsuite" = .{
+            .url = "git+https://github.com/WebAssembly/testsuite.git#cbc54d77065e5202bcb69e0d1c53ceccc29a7984",
+            .hash = "1220514322cffa4b7d7332f674149b2ce6c28b81849a6fed7e545259bc455b9a2efd",
+        },
+        .wabt = .{
+            .path = "../wabt",
+        },
+        .@"jaune:wasm-runtime" = .{
+            .path = "../..",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+    },
+}

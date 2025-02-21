@@ -1,0 +1,18 @@
+.{
+    .name = "wabt",
+    .version = "0.0.0",
+    .dependencies = .{
+        .@"wabt:sources" = .{
+            .url = "git+https://github.com/WebAssembly/wabt.git#508984b73b6c9970272583d8d02908ae32f18b9e",
+            .hash = "1220cbacbf2ad72c3075004c6c6ca7c8307c36c8c92984c51cd96a5407dc4916ebf3",
+        },
+        .@"picosha2:sources" = .{
+            .url = "git+https://github.com/okdshin/PicoSHA2.git#27fcf6979298949e8a462e16d09a0351c18fcaf2",
+            .hash = "1220980b14c6ea107d69eafcf42f1ddcfc27f797f69fe6a00317715cb732cd4d2c4c",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+    },
+}
