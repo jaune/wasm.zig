@@ -151,7 +151,7 @@ pub fn invokeFunction(m: *const Module, runtime: *Runtime, func_idx: u32, parame
                         return error.InvalidParameterType;
                     },
                 };
-                try runtime.value_stack.append(.{ .f32 = value });
+                try runtime.pushValue(f32, value);
             },
             else => {
                 return error.UnsupportedParameterType;
@@ -328,6 +328,7 @@ const InstructionFunctions = struct {
 
         try runtime.pushValue(i32, if (@as(u32, @bitCast(b)) >= @as(u32, @bitCast(a))) 1 else 0);
     }
+
     fn @"i64.eqz"(runtime: *Runtime) !void {
         _ = runtime;
         std.log.info("inside i64.eqz", .{});
@@ -609,95 +610,83 @@ const InstructionFunctions = struct {
         std.log.info("inside f32.neg", .{});
     }
     fn @"f32.ceil"(runtime: *Runtime) !void {
-        const a = runtime.value_stack.pop().f32;
+        const a = runtime.popValue(f32);
 
-        try runtime.value_stack.append(.{ .f32 = std.math.ceil(a) });
+        try runtime.pushValue(f32, std.math.ceil(a));
     }
     fn @"f32.floor"(runtime: *Runtime) !void {
-        const a = runtime.value_stack.pop().f32;
+        const a = runtime.popValue(f32);
 
-        try runtime.value_stack.append(.{ .f32 = std.math.floor(a) });
+        try runtime.pushValue(f32, std.math.floor(a));
     }
     fn @"f32.trunc"(runtime: *Runtime) !void {
-        const a = runtime.value_stack.pop().f32;
+        const a = runtime.popValue(f32);
 
-        try runtime.value_stack.append(.{ .f32 = std.math.trunc(a) });
+        try runtime.pushValue(f32, std.math.trunc(a));
     }
     fn @"f32.nearest"(runtime: *Runtime) !void {
-        const a = runtime.value_stack.pop().f32;
+        const a = runtime.popValue(f32);
 
-        try runtime.value_stack.append(.{ .f32 = try floatNearest(f32, a) });
+        try runtime.pushValue(f32, try floatNearest(f32, a));
     }
     fn @"f32.sqrt"(runtime: *Runtime) !void {
-        const a = runtime.value_stack.pop().f32;
+        const a = runtime.popValue(f32);
 
-        try runtime.value_stack.append(.{ .f32 = std.math.sqrt(a) });
+        try runtime.pushValue(f32, std.math.sqrt(a));
     }
     fn @"f32.add"(runtime: *Runtime) !void {
-        const a = runtime.value_stack.pop().f32;
-        const b = runtime.value_stack.pop().f32;
+        const a = runtime.popValue(f32);
+        const b = runtime.popValue(f32);
 
-        try runtime.value_stack.append(.{ .f32 = a + b });
+        try runtime.pushValue(f32, a + b);
     }
     fn @"f32.sub"(runtime: *Runtime) !void {
-        const a = runtime.value_stack.pop().f32;
-        const b = runtime.value_stack.pop().f32;
+        const a = runtime.popValue(f32);
+        const b = runtime.popValue(f32);
 
-        try runtime.value_stack.append(.{ .f32 = b - a });
+        try runtime.pushValue(f32, b - a);
     }
     fn @"f32.mul"(runtime: *Runtime) !void {
-        const a = runtime.value_stack.pop().f32;
-        const b = runtime.value_stack.pop().f32;
+        const a = runtime.popValue(f32);
+        const b = runtime.popValue(f32);
 
-        try runtime.value_stack.append(.{ .f32 = a * b });
+        try runtime.pushValue(f32, a * b);
     }
     fn @"f32.div"(runtime: *Runtime) !void {
-        const a = runtime.value_stack.pop().f32;
-        const b = runtime.value_stack.pop().f32;
+        const a = runtime.popValue(f32);
+        const b = runtime.popValue(f32);
 
-        try runtime.value_stack.append(.{ .f32 = b / a });
+        try runtime.pushValue(f32, b / a);
     }
     fn @"f32.min"(runtime: *Runtime) !void {
-        const a = runtime.value_stack.pop().f32;
-        const b = runtime.value_stack.pop().f32;
+        const a = runtime.popValue(f32);
+        const b = runtime.popValue(f32);
 
         if (std.math.isNan(a)) {
-            try runtime.value_stack.append(.{
-                .f32 = std.math.nan(f32),
-            });
+            try runtime.pushValue(f32, std.math.nan(f32));
             return;
         }
         if (std.math.isNan(b)) {
-            try runtime.value_stack.append(.{
-                .f32 = std.math.nan(f32),
-            });
+            try runtime.pushValue(f32, std.math.nan(f32));
             return;
         }
 
-        try runtime.value_stack.append(.{
-            .f32 = if (a > b) b else a,
-        });
+        try runtime.pushValue(f32, if (a > b) b else a);
     }
     fn @"f32.max"(runtime: *Runtime) !void {
-        const a = runtime.value_stack.pop().f32;
-        const b = runtime.value_stack.pop().f32;
+        const a = runtime.popValue(f32);
+        const b = runtime.popValue(f32);
 
         if (std.math.isNan(a)) {
-            try runtime.value_stack.append(.{
-                .f32 = std.math.nan(f32),
-            });
+            try runtime.pushValue(f32, std.math.nan(f32));
             return;
         }
         if (std.math.isNan(b)) {
-            try runtime.value_stack.append(.{
-                .f32 = std.math.nan(f32),
-            });
+            try runtime.pushValue(f32, std.math.nan(f32));
             return;
         }
 
-        try runtime.value_stack.append(.{
-            .f32 = if (a > b) a else b,
-        });
+        try runtime.pushValue(f32, if (a > b) a else b);
     }
     fn @"f32.copysign"(runtime: *Runtime) !void {
         _ = runtime;
