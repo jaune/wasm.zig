@@ -191,7 +191,15 @@ pub fn main() !void {
                 std.log.err("command fail: line={d}", .{command.line});
                 return err;
             };
-            // std.log.info("{s}: {d}: passed", .{ action.field, command.line });
+        } else if (std.mem.eql(u8, command.type, "assert_trap")) {
+            const mod = current_module orelse {
+                return error.NoModule;
+            };
+
+            assertTrap(allocator, &mod, &command) catch |err| {
+                std.log.err("command fail: line={d}", .{command.line});
+                return err;
+            };
         }
     }
 
@@ -202,12 +210,13 @@ pub fn main() !void {
     std.log.info("all tests passed", .{});
 }
 
-fn assertReturn(allocator: std.mem.Allocator, mod: *const module.Module, command: *const JsonWast.Command) !void {
+fn assertTrap(allocator: std.mem.Allocator, mod: *const module.Module, command: *const JsonWast.Command) !void {
     const action: JsonWast.Action = command.action orelse {
         return error.ActionMissing;
     };
-    const expected: []JsonWast.ExpectedValue = command.expected orelse {
-        return error.ExpectedMissing;
+
+    const text: []const u8 = command.text orelse {
+        return error.TextMissing;
     };
 
     if (!std.mem.eql(u8, action.type, "invoke")) {
@@ -227,10 +236,84 @@ fn assertReturn(allocator: std.mem.Allocator, mod: *const module.Module, command
         p.* = try a.toRuntimeValue();
     }
 
+    const funciton_type = mod.function_types[mod.function_type_indices[fn_index]];
+
+    const results = try allocator.alloc(runtime.Value, funciton_type.results.len);
+    defer allocator.free(results);
+
+    const expected = errorFromText(text) orelse {
+        std.log.err("MissingErrorFromText: {s}", .{text});
+        return error.MissingErrorFromText;
+    };
+
+    // std.log.info("assert_trap: {d}", .{command.line});
+
+    // for (parameters, 0..) |p, i| {
+    //     std.log.err("{d}: {}", .{ i, p });
+    // }
+
+    runtime.invokeFunction(mod, &rt, fn_index, parameters, results) catch |given| {
+        if (given != expected) {
+            std.log.err("{s}: assert_trap: {d}: expected={}, given={} ", .{ action.field, command.line, expected, given });
+            return error.Fail;
+        }
+    };
+}
+
+fn errorFromText(text: []const u8) ?PanicError {
+    if (std.mem.eql(u8, text, "integer divide by zero")) {
+        return PanicError.DivisionByZero;
+    }
+    if (std.mem.eql(u8, text, "integer overflow")) {
+        return PanicError.Overflow;
+    }
+    if (std.mem.eql(u8, text, "invalid conversion to integer")) {
+        return PanicError.InvalidCastToInt;
+    }
+
+    return null;
+}
+
+const PanicError = error{ DivisionByZero, Overflow, InvalidCastToInt };
+
+fn assertReturn(allocator: std.mem.Allocator, mod: *const module.Module, command: *const JsonWast.Command) !void {
+    const action: JsonWast.Action = command.action orelse {
+        return error.ActionMissing;
+    };
+    const expected: []JsonWast.ExpectedValue = command.expected orelse {
+        return error.ExpectedMissing;
+    };
+
+    if (!std.mem.eql(u8, action.type, "invoke")) {
+        return error.UnsupportedAction;
+    }
+
+    // std.log.info("assert_return: {d}", .{command.line});
+
+    const fn_index = mod.findExportedFunctionIndex(action.field) orelse {
+        return error.NoFunction;
+    };
+
+    var rt = runtime.Runtime.init();
+
+    const parameters = try allocator.alloc(runtime.Value, action.args.len);
+    defer allocator.free(parameters);
+
+    for (parameters, action.args) |*p, a| {
+        p.* = try a.toRuntimeValue();
+    }
+
     const results = try allocator.alloc(runtime.Value, expected.len);
     defer allocator.free(results);
 
-    try runtime.invokeFunction(mod, &rt, fn_index, parameters, results);
+    runtime.invokeFunction(mod, &rt, fn_index, parameters, results) catch |err| {
+        std.log.err("{s}: assert_return: {d}: error: {}", .{ action.field, command.line, err });
+
+        for (parameters, 0..) |p, i| {
+            std.log.err("{d}: {}", .{ i, p });
+        }
+        return err;
+    };
 
     for (expected, results) |e, r| {
         if (!try e.testRuntimeValue(r)) {
@@ -240,7 +323,7 @@ fn assertReturn(allocator: std.mem.Allocator, mod: *const module.Module, command
                     .value = ev,
                 }).toRuntimeValue();
 
-                std.log.err("{s}: {d}: expected={}, given={} ", .{ action.field, command.line, erv, r });
+                std.log.err("{s}: assert_return: {d}: expected={}, given={} ", .{ action.field, command.line, erv, r });
 
                 switch (erv) {
                     .f32 => std.log.err("expected=b{b}, given=b{b}", .{ @as(u32, @bitCast(erv.f32)), @as(u32, @bitCast(r.f32)) }),
@@ -249,7 +332,7 @@ fn assertReturn(allocator: std.mem.Allocator, mod: *const module.Module, command
                     .i64 => std.log.err("expected=b{b}, given=b{b}", .{ @as(u64, @bitCast(erv.i64)), @as(u64, @bitCast(r.i64)) }),
                 }
             } else {
-                std.log.err("{s}: {d}: expected=<null>({s}), given={} ", .{ action.field, command.line, e.type, r });
+                std.log.err("{s}: assert_return: {d}: expected=<null>({s}), given={} ", .{ action.field, command.line, e.type, r });
             }
 
             for (parameters, 0..) |p, i| {
