@@ -263,70 +263,281 @@ const InstructionFunctions = struct {
         _ = value;
     }
 
-    fn @"i32.eqz"(runtime: *Runtime) !void {
-        const a = runtime.popValue(i32);
+    fn @"i.eqz"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
 
-        try runtime.pushValue(i32, if (a == 0) 1 else 0);
+        try runtime.pushValue(T, if (a == 0) 1 else 0);
+    }
+    fn @"i.eq"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+
+        try runtime.pushValue(T, if (a == b) 1 else 0);
+    }
+    fn @"i.ne"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+
+        try runtime.pushValue(T, if (a != b) 1 else 0);
+    }
+    fn @"i.lt_s"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+
+        try runtime.pushValue(T, if (b < a) 1 else 0);
+    }
+    fn @"i.lt_u"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+        const UnsignedType: type = std.meta.Int(.unsigned, @bitSizeOf(T));
+
+        try runtime.pushValue(T, if (@as(UnsignedType, @bitCast(b)) < @as(UnsignedType, @bitCast(a))) 1 else 0);
+    }
+    fn @"i.gt_s"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+
+        try runtime.pushValue(T, if (b > a) 1 else 0);
+    }
+    fn @"i.gt_u"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+        const UnsignedType: type = std.meta.Int(.unsigned, @bitSizeOf(T));
+
+        try runtime.pushValue(T, if (@as(UnsignedType, @bitCast(b)) > @as(UnsignedType, @bitCast(a))) 1 else 0);
+    }
+    fn @"i.le_s"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+
+        try runtime.pushValue(T, if (b <= a) 1 else 0);
+    }
+    fn @"i.le_u"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+
+        try runtime.pushValue(T, if (@as(u32, @bitCast(b)) <= @as(u32, @bitCast(a))) 1 else 0);
+    }
+    fn @"i.ge_s"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+
+        try runtime.pushValue(T, if (b >= a) 1 else 0);
+    }
+    fn @"i.ge_u"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+        const UnsignedType: type = std.meta.Int(.unsigned, @bitSizeOf(T));
+
+        try runtime.pushValue(T, if (@as(UnsignedType, @bitCast(b)) >= @as(UnsignedType, @bitCast(a))) 1 else 0);
+    }
+
+    fn @"i.and"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+
+        try runtime.pushValue(T, a & b);
+    }
+    fn @"i.or"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+
+        try runtime.pushValue(T, a | b);
+    }
+    fn @"i.xor"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+
+        try runtime.pushValue(T, b ^ a);
+    }
+    fn @"i.shl"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+
+        try runtime.pushValue(T, try intShl(T, b, a));
+    }
+    fn @"i.shr_s"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+
+        try runtime.pushValue(T, try intShr(T, b, a));
+    }
+    fn @"i.shr_u"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+        const UnsignedType: type = std.meta.Int(.unsigned, @bitSizeOf(T));
+
+        try runtime.pushValue(T, @bitCast(try intShr(UnsignedType, @bitCast(b), @bitCast(a))));
+    }
+    fn @"i.rotl"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+
+        try runtime.pushValue(T, try intRotl(T, b, a));
+    }
+    fn @"i.rotr"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+
+        try runtime.pushValue(T, try intRotr(T, b, a));
+    }
+
+    fn @"i.clz"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+
+        try runtime.pushValue(T, @clz(a));
+    }
+
+    fn @"i.ctz"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+
+        try runtime.pushValue(T, @ctz(a));
+    }
+    fn @"i.popcnt"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+
+        try runtime.pushValue(T, @popCount(a));
+    }
+    fn @"i.add"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+
+        try runtime.pushValue(T, a +% b);
+    }
+    fn @"i.sub"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+
+        try runtime.pushValue(T, b -% a);
+    }
+    fn @"i.mul"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+
+        try runtime.pushValue(T, a *% b);
+    }
+    fn @"i.div_s"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+
+        try runtime.pushValue(T, try std.math.divTrunc(T, b, a));
+    }
+
+    fn @"i.div_u"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+        const UnsignedType: type = std.meta.Int(.unsigned, @bitSizeOf(T));
+
+        try runtime.pushValue(T, @bitCast(try std.math.divTrunc(UnsignedType, @bitCast(b), @bitCast(a))));
+    }
+
+    fn @"i.rem_s"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+
+        try runtime.pushValue(T, try remS(T, b, a));
+    }
+
+    fn @"i.rem_u"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+        const UnsignedType: type = std.meta.Int(.unsigned, @bitSizeOf(T));
+
+        try runtime.pushValue(T, @bitCast(try remS(UnsignedType, @bitCast(b), @bitCast(a))));
+    }
+
+    fn @"i32.eqz"(runtime: *Runtime) !void {
+        try @"i.eqz"(i32, runtime);
     }
     fn @"i32.eq"(runtime: *Runtime) !void {
-        const a = runtime.popValue(i32);
-        const b = runtime.popValue(i32);
-
-        try runtime.pushValue(i32, if (a == b) 1 else 0);
+        try @"i.eq"(i32, runtime);
     }
     fn @"i32.ne"(runtime: *Runtime) !void {
-        const a = runtime.popValue(i32);
-        const b = runtime.popValue(i32);
-
-        try runtime.pushValue(i32, if (a != b) 1 else 0);
+        try @"i.ne"(i32, runtime);
     }
     fn @"i32.lt_s"(runtime: *Runtime) !void {
-        const a = runtime.popValue(i32);
-        const b = runtime.popValue(i32);
-
-        try runtime.pushValue(i32, if (b < a) 1 else 0);
+        try @"i.lt_s"(i32, runtime);
     }
     fn @"i32.lt_u"(runtime: *Runtime) !void {
-        const a = runtime.popValue(i32);
-        const b = runtime.popValue(i32);
-
-        try runtime.pushValue(i32, if (@as(u32, @bitCast(b)) < @as(u32, @bitCast(a))) 1 else 0);
+        try @"i.lt_u"(i32, runtime);
     }
     fn @"i32.gt_s"(runtime: *Runtime) !void {
-        const a = runtime.popValue(i32);
-        const b = runtime.popValue(i32);
-
-        try runtime.pushValue(i32, if (b > a) 1 else 0);
+        try @"i.gt_s"(i32, runtime);
     }
     fn @"i32.gt_u"(runtime: *Runtime) !void {
-        const a = runtime.popValue(i32);
-        const b = runtime.popValue(i32);
-
-        try runtime.pushValue(i32, if (@as(u32, @bitCast(b)) > @as(u32, @bitCast(a))) 1 else 0);
+        try @"i.gt_u"(i32, runtime);
     }
     fn @"i32.le_s"(runtime: *Runtime) !void {
-        const a = runtime.popValue(i32);
-        const b = runtime.popValue(i32);
-
-        try runtime.pushValue(i32, if (b <= a) 1 else 0);
+        try @"i.le_s"(i32, runtime);
     }
     fn @"i32.le_u"(runtime: *Runtime) !void {
-        const a = runtime.popValue(i32);
-        const b = runtime.popValue(i32);
-
-        try runtime.pushValue(i32, if (@as(u32, @bitCast(b)) <= @as(u32, @bitCast(a))) 1 else 0);
+        try @"i.le_u"(i32, runtime);
     }
     fn @"i32.ge_s"(runtime: *Runtime) !void {
-        const a = runtime.popValue(i32);
-        const b = runtime.popValue(i32);
-
-        try runtime.pushValue(i32, if (b >= a) 1 else 0);
+        try @"i.ge_s"(i32, runtime);
     }
     fn @"i32.ge_u"(runtime: *Runtime) !void {
-        const a = runtime.popValue(i32);
-        const b = runtime.popValue(i32);
+        try @"i.ge_u"(i32, runtime);
+    }
 
-        try runtime.pushValue(i32, if (@as(u32, @bitCast(b)) >= @as(u32, @bitCast(a))) 1 else 0);
+    fn @"i32.and"(runtime: *Runtime) !void {
+        try @"i.and"(i32, runtime);
+    }
+    fn @"i32.or"(runtime: *Runtime) !void {
+        try @"i.or"(i32, runtime);
+    }
+    fn @"i32.xor"(runtime: *Runtime) !void {
+        try @"i.xor"(i32, runtime);
+    }
+    fn @"i32.shl"(runtime: *Runtime) !void {
+        try @"i.shl"(i32, runtime);
+    }
+    fn @"i32.shr_s"(runtime: *Runtime) !void {
+        try @"i.shr_s"(i32, runtime);
+    }
+    fn @"i32.shr_u"(runtime: *Runtime) !void {
+        try @"i.shr_u"(i32, runtime);
+    }
+    fn @"i32.rotl"(runtime: *Runtime) !void {
+        try @"i.rotl"(i32, runtime);
+    }
+    fn @"i32.rotr"(runtime: *Runtime) !void {
+        try @"i.rotr"(i32, runtime);
+    }
+
+    fn @"i32.clz"(runtime: *Runtime) !void {
+        try @"i.clz"(i32, runtime);
+    }
+
+    fn @"i32.ctz"(runtime: *Runtime) !void {
+        try @"i.ctz"(i32, runtime);
+    }
+    fn @"i32.popcnt"(runtime: *Runtime) !void {
+        try @"i.popcnt"(i32, runtime);
+    }
+    fn @"i32.add"(runtime: *Runtime) !void {
+        try @"i.add"(i32, runtime);
+    }
+    fn @"i32.sub"(runtime: *Runtime) !void {
+        try @"i.sub"(i32, runtime);
+    }
+    fn @"i32.mul"(runtime: *Runtime) !void {
+        try @"i.mul"(i32, runtime);
+    }
+    fn @"i32.div_s"(runtime: *Runtime) !void {
+        try @"i.div_s"(i32, runtime);
+    }
+
+    fn @"i32.div_u"(runtime: *Runtime) !void {
+        try @"i.div_u"(i32, runtime);
+    }
+
+    fn @"i32.rem_s"(runtime: *Runtime) !void {
+        try @"i.rem_s"(i32, runtime);
+    }
+
+    fn @"i32.rem_u"(runtime: *Runtime) !void {
+        try @"i.rem_u"(i32, runtime);
     }
 
     fn @"i64.eqz"(runtime: *Runtime) !void {
@@ -373,6 +584,7 @@ const InstructionFunctions = struct {
         _ = runtime;
         std.log.info("inside i64.ge_u", .{});
     }
+
     fn @"f32.eq"(runtime: *Runtime) !void {
         _ = runtime;
         std.log.info("inside f32.eq", .{});
@@ -421,114 +633,7 @@ const InstructionFunctions = struct {
         _ = runtime;
         std.log.info("inside f64.ge", .{});
     }
-    fn @"i32.clz"(runtime: *Runtime) !void {
-        const a = runtime.popValue(i32);
 
-        try runtime.pushValue(i32, @clz(a));
-    }
-    fn @"i32.ctz"(runtime: *Runtime) !void {
-        const a = runtime.popValue(i32);
-
-        try runtime.pushValue(i32, @ctz(a));
-    }
-    fn @"i32.popcnt"(runtime: *Runtime) !void {
-        const a = runtime.popValue(i32);
-
-        try runtime.pushValue(i32, @popCount(a));
-    }
-    fn @"i32.add"(runtime: *Runtime) !void {
-        const a = runtime.popValue(i32);
-        const b = runtime.popValue(i32);
-
-        try runtime.pushValue(i32, a +% b);
-    }
-    fn @"i32.sub"(runtime: *Runtime) !void {
-        const a = runtime.popValue(i32);
-        const b = runtime.popValue(i32);
-
-        try runtime.pushValue(i32, b -% a);
-    }
-    fn @"i32.mul"(runtime: *Runtime) !void {
-        const a = runtime.popValue(i32);
-        const b = runtime.popValue(i32);
-
-        try runtime.pushValue(i32, a *% b);
-    }
-    fn @"i32.div_s"(runtime: *Runtime) !void {
-        const a = runtime.popValue(i32);
-        const b = runtime.popValue(i32);
-
-        try runtime.pushValue(i32, try std.math.divTrunc(i32, b, a));
-    }
-
-    fn @"i32.div_u"(runtime: *Runtime) !void {
-        const a = runtime.popValue(i32);
-        const b = runtime.popValue(i32);
-
-        try runtime.pushValue(i32, @bitCast(try std.math.divTrunc(u32, @bitCast(b), @bitCast(a))));
-    }
-
-    fn @"i32.rem_s"(runtime: *Runtime) !void {
-        const a = runtime.popValue(i32);
-        const b = runtime.popValue(i32);
-
-        try runtime.pushValue(i32, try remS(i32, b, a));
-    }
-
-    fn @"i32.rem_u"(runtime: *Runtime) !void {
-        const a = runtime.popValue(i32);
-        const b = runtime.popValue(i32);
-
-        try runtime.pushValue(i32, @bitCast(try remS(u32, @bitCast(b), @bitCast(a))));
-    }
-    fn @"i32.and"(runtime: *Runtime) !void {
-        const a = runtime.popValue(i32);
-        const b = runtime.popValue(i32);
-
-        try runtime.pushValue(i32, a & b);
-    }
-    fn @"i32.or"(runtime: *Runtime) !void {
-        const a = runtime.popValue(i32);
-        const b = runtime.popValue(i32);
-
-        try runtime.pushValue(i32, a | b);
-    }
-    fn @"i32.xor"(runtime: *Runtime) !void {
-        const a = runtime.popValue(i32);
-        const b = runtime.popValue(i32);
-
-        try runtime.pushValue(i32, b ^ a);
-    }
-    fn @"i32.shl"(runtime: *Runtime) !void {
-        const a = runtime.popValue(i32);
-        const b = runtime.popValue(i32);
-
-        try runtime.pushValue(i32, try intShl(i32, b, a));
-    }
-    fn @"i32.shr_s"(runtime: *Runtime) !void {
-        const a = runtime.popValue(i32);
-        const b = runtime.popValue(i32);
-
-        try runtime.pushValue(i32, try intShr(i32, b, a));
-    }
-    fn @"i32.shr_u"(runtime: *Runtime) !void {
-        const a = runtime.popValue(i32);
-        const b = runtime.popValue(i32);
-
-        try runtime.pushValue(i32, @bitCast(try intShr(u32, @bitCast(b), @bitCast(a))));
-    }
-    fn @"i32.rotl"(runtime: *Runtime) !void {
-        const a = runtime.popValue(i32);
-        const b = runtime.popValue(i32);
-
-        try runtime.pushValue(i32, try intRotl(i32, b, a));
-    }
-    fn @"i32.rotr"(runtime: *Runtime) !void {
-        const a = runtime.popValue(i32);
-        const b = runtime.popValue(i32);
-
-        try runtime.pushValue(i32, try intRotr(i32, b, a));
-    }
     fn @"i64.clz"(runtime: *Runtime) !void {
         _ = runtime;
         std.log.info("inside i64.clz", .{});
