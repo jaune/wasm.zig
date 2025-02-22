@@ -153,6 +153,15 @@ pub fn invokeFunction(m: *const Module, runtime: *Runtime, func_idx: u32, parame
                 };
                 try runtime.pushValue(f32, value);
             },
+            .f64 => {
+                const value = switch (parameters[i]) {
+                    .f64 => |v| v,
+                    else => {
+                        return error.InvalidParameterType;
+                    },
+                };
+                try runtime.pushValue(f64, value);
+            },
             else => {
                 return error.UnsupportedParameterType;
             },
@@ -196,6 +205,14 @@ pub fn invokeFunction(m: *const Module, runtime: *Runtime, func_idx: u32, parame
             .f32 => {
                 results[i] = switch (value) {
                     .f32 => value,
+                    else => {
+                        return error.InvalidResultType;
+                    },
+                };
+            },
+            .f64 => {
+                results[i] = switch (value) {
+                    .f64 => value,
                     else => {
                         return error.InvalidResultType;
                     },
@@ -722,84 +739,118 @@ const InstructionFunctions = struct {
         std.log.info("inside f32.neg", .{});
     }
 
-    fn @"f32.ceil"(runtime: *Runtime) !void {
-        const a = runtime.popValue(f32);
+    fn @"f.ceil"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
 
-        try runtime.pushValue(f32, std.math.ceil(a));
+        try runtime.pushValue(T, std.math.ceil(a));
+    }
+    fn @"f.floor"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+
+        try runtime.pushValue(T, std.math.floor(a));
+    }
+    fn @"f.trunc"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+
+        try runtime.pushValue(T, std.math.trunc(a));
+    }
+    fn @"f.nearest"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+
+        try runtime.pushValue(T, try floatNearest(T, a));
+    }
+    fn @"f.sqrt"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+
+        try runtime.pushValue(T, std.math.sqrt(a));
+    }
+    fn @"f.add"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+
+        try runtime.pushValue(T, a + b);
+    }
+    fn @"f.sub"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+
+        try runtime.pushValue(T, b - a);
+    }
+    fn @"f.mul"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+
+        try runtime.pushValue(T, a * b);
+    }
+    fn @"f.div"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+
+        try runtime.pushValue(T, b / a);
+    }
+    fn @"f.min"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+
+        if (std.math.isNan(a)) {
+            try runtime.pushValue(T, std.math.nan(T));
+            return;
+        }
+        if (std.math.isNan(b)) {
+            try runtime.pushValue(T, std.math.nan(T));
+            return;
+        }
+
+        try runtime.pushValue(T, if (a > b) b else a);
+    }
+    fn @"f.max"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+
+        if (std.math.isNan(a)) {
+            try runtime.pushValue(T, std.math.nan(T));
+            return;
+        }
+        if (std.math.isNan(b)) {
+            try runtime.pushValue(T, std.math.nan(T));
+            return;
+        }
+
+        try runtime.pushValue(T, if (a > b) a else b);
+    }
+
+    fn @"f32.ceil"(runtime: *Runtime) !void {
+        try @"f.ceil"(f32, runtime);
     }
     fn @"f32.floor"(runtime: *Runtime) !void {
-        const a = runtime.popValue(f32);
-
-        try runtime.pushValue(f32, std.math.floor(a));
+        try @"f.floor"(f32, runtime);
     }
     fn @"f32.trunc"(runtime: *Runtime) !void {
-        const a = runtime.popValue(f32);
-
-        try runtime.pushValue(f32, std.math.trunc(a));
+        try @"f.trunc"(f32, runtime);
     }
     fn @"f32.nearest"(runtime: *Runtime) !void {
-        const a = runtime.popValue(f32);
-
-        try runtime.pushValue(f32, try floatNearest(f32, a));
+        try @"f.nearest"(f32, runtime);
     }
     fn @"f32.sqrt"(runtime: *Runtime) !void {
-        const a = runtime.popValue(f32);
-
-        try runtime.pushValue(f32, std.math.sqrt(a));
+        try @"f.sqrt"(f32, runtime);
     }
     fn @"f32.add"(runtime: *Runtime) !void {
-        const a = runtime.popValue(f32);
-        const b = runtime.popValue(f32);
-
-        try runtime.pushValue(f32, a + b);
+        try @"f.add"(f32, runtime);
     }
     fn @"f32.sub"(runtime: *Runtime) !void {
-        const a = runtime.popValue(f32);
-        const b = runtime.popValue(f32);
-
-        try runtime.pushValue(f32, b - a);
+        try @"f.sub"(f32, runtime);
     }
     fn @"f32.mul"(runtime: *Runtime) !void {
-        const a = runtime.popValue(f32);
-        const b = runtime.popValue(f32);
-
-        try runtime.pushValue(f32, a * b);
+        try @"f.mul"(f32, runtime);
     }
     fn @"f32.div"(runtime: *Runtime) !void {
-        const a = runtime.popValue(f32);
-        const b = runtime.popValue(f32);
-
-        try runtime.pushValue(f32, b / a);
+        try @"f.div"(f32, runtime);
     }
     fn @"f32.min"(runtime: *Runtime) !void {
-        const a = runtime.popValue(f32);
-        const b = runtime.popValue(f32);
-
-        if (std.math.isNan(a)) {
-            try runtime.pushValue(f32, std.math.nan(f32));
-            return;
-        }
-        if (std.math.isNan(b)) {
-            try runtime.pushValue(f32, std.math.nan(f32));
-            return;
-        }
-
-        try runtime.pushValue(f32, if (a > b) b else a);
+        try @"f.min"(f32, runtime);
     }
     fn @"f32.max"(runtime: *Runtime) !void {
-        const a = runtime.popValue(f32);
-        const b = runtime.popValue(f32);
-
-        if (std.math.isNan(a)) {
-            try runtime.pushValue(f32, std.math.nan(f32));
-            return;
-        }
-        if (std.math.isNan(b)) {
-            try runtime.pushValue(f32, std.math.nan(f32));
-            return;
-        }
-
-        try runtime.pushValue(f32, if (a > b) a else b);
+        try @"f.max"(f32, runtime);
     }
     fn @"f32.copysign"(runtime: *Runtime) !void {
         _ = runtime;
@@ -814,48 +865,37 @@ const InstructionFunctions = struct {
         std.log.info("inside f64.neg", .{});
     }
     fn @"f64.ceil"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside f64.ceil", .{});
+        try @"f.ceil"(f64, runtime);
     }
     fn @"f64.floor"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside f64.floor", .{});
+        try @"f.floor"(f64, runtime);
     }
     fn @"f64.trunc"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside f64.trunc", .{});
+        try @"f.trunc"(f64, runtime);
     }
     fn @"f64.nearest"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside f64.nearest", .{});
+        try @"f.nearest"(f64, runtime);
     }
     fn @"f64.sqrt"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside f64.sqrt", .{});
+        try @"f.sqrt"(f64, runtime);
     }
     fn @"f64.add"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside f64.add", .{});
+        try @"f.add"(f64, runtime);
     }
     fn @"f64.sub"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside f64.sub", .{});
+        try @"f.sub"(f64, runtime);
     }
     fn @"f64.mul"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside f64.mul", .{});
+        try @"f.mul"(f64, runtime);
     }
     fn @"f64.div"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside f64.div", .{});
+        try @"f.div"(f64, runtime);
     }
     fn @"f64.min"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside f64.min", .{});
+        try @"f.min"(f64, runtime);
     }
     fn @"f64.max"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside f64.max", .{});
+        try @"f.max"(f64, runtime);
     }
     fn @"f64.copysign"(runtime: *Runtime) !void {
         _ = runtime;

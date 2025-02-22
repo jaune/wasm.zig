@@ -12,9 +12,17 @@ const JsonWast = struct {
         fn eqlRuntimeValue(self: ExpectedValue, other: runtime.Value) !bool {
             if (self.value) |value| {
                 if (std.mem.eql(u8, value, "nan:arithmetic")) {
-                    return std.math.isNan(other.f32);
+                    return switch (other) {
+                        .f32 => |v| std.math.isNan(v),
+                        .f64 => |v| std.math.isNan(v),
+                        else => error.UnsupportedType,
+                    };
                 } else if (std.mem.eql(u8, value, "nan:canonical")) {
-                    return std.math.isNan(other.f32);
+                    return switch (other) {
+                        .f32 => |v| std.math.isNan(v),
+                        .f64 => |v| std.math.isNan(v),
+                        else => error.UnsupportedType,
+                    };
                 } else {
                     const c = try (Value{
                         .type = self.type,
@@ -39,6 +47,13 @@ const JsonWast = struct {
 
                 return .{
                     .f32 = @as(f32, @bitCast(parsed)),
+                };
+            }
+            if (std.mem.eql(u8, self.type, "f64")) {
+                const parsed = try std.fmt.parseUnsigned(u64, self.value, 10);
+
+                return .{
+                    .f64 = @as(f64, @bitCast(parsed)),
                 };
             }
             if (std.mem.eql(u8, self.type, "i32")) {
