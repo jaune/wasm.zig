@@ -9,7 +9,7 @@ const JsonWast = struct {
         type: []u8,
         value: ?[]u8 = null,
 
-        fn eqlRuntimeValue(self: ExpectedValue, other: runtime.Value) !bool {
+        fn testRuntimeValue(self: ExpectedValue, other: runtime.Value) !bool {
             if (self.value) |value| {
                 if (std.mem.eql(u8, value, "nan:arithmetic")) {
                     return switch (other) {
@@ -24,12 +24,29 @@ const JsonWast = struct {
                         else => error.UnsupportedType,
                     };
                 } else {
-                    const c = try (Value{
+                    const jv = Value{
                         .type = self.type,
                         .value = value,
-                    }).toRuntimeValue();
+                    };
+                    const rv = try jv.toRuntimeValue();
 
-                    return c.eql(other);
+                    switch (rv) {
+                        .i32, .i64 => {
+                            return rv.eql(other);
+                        },
+                        .f32 => |f| {
+                            if (std.math.isNan(f) and std.math.isNan(other.f32)) {
+                                return true;
+                            }
+                            return rv.eql(other);
+                        },
+                        .f64 => |f| {
+                            if (std.math.isNan(f) and std.math.isNan(other.f64)) {
+                                return true;
+                            }
+                            return rv.eql(other);
+                        },
+                    }
                 }
             } else {
                 return false;
@@ -216,11 +233,21 @@ fn assertReturn(allocator: std.mem.Allocator, mod: *const module.Module, command
     try runtime.invokeFunction(mod, &rt, fn_index, parameters, results);
 
     for (expected, results) |e, r| {
-        if (!try e.eqlRuntimeValue(r)) {
-            std.log.err("{s}: {d}: expected={s}({s}), given={} ", .{ action.field, command.line, e.value orelse "<null>", e.type, r });
+        if (!try e.testRuntimeValue(r)) {
+            if (e.value) |ev| {
+                const erv = try (JsonWast.Value{
+                    .type = e.type,
+                    .value = ev,
+                }).toRuntimeValue();
+
+                std.log.err("{s}: {d}: expected={}, given={} ", .{ action.field, command.line, erv, r });
+                std.log.err("expected=b{b}, given=b{b}", .{ @as(u32, @bitCast(erv.f32)), @as(u32, @bitCast(r.f32)) });
+            } else {
+                std.log.err("{s}: {d}: expected=<null>({s}), given={} ", .{ action.field, command.line, e.type, r });
+            }
 
             for (parameters, 0..) |p, i| {
-                std.log.err("  {d}: {}", .{ i, p });
+                std.log.err("{d}: {}", .{ i, p });
             }
 
             return error.Fail;

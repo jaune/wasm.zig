@@ -752,12 +752,22 @@ const InstructionFunctions = struct {
     }
 
     fn @"f32.abs"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside f32.abs", .{});
+        try @"f.abs"(f32, runtime);
     }
     fn @"f32.neg"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside f32.neg", .{});
+        try @"f.neg"(f32, runtime);
+    }
+
+    fn @"f.abs"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+
+        try runtime.pushValue(T, @abs(a));
+    }
+
+    fn @"f.neg"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+
+        try runtime.pushValue(T, -a);
     }
 
     fn @"f.ceil"(comptime T: type, runtime: *Runtime) !void {
@@ -840,6 +850,13 @@ const InstructionFunctions = struct {
         try runtime.pushValue(T, if (a > b) a else b);
     }
 
+    fn @"f.copysign"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+
+        try runtime.pushValue(T, std.math.copysign(b, a));
+    }
+
     fn @"f32.ceil"(runtime: *Runtime) !void {
         try @"f.ceil"(f32, runtime);
     }
@@ -874,16 +891,13 @@ const InstructionFunctions = struct {
         try @"f.max"(f32, runtime);
     }
     fn @"f32.copysign"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside f32.copysign", .{});
+        try @"f.copysign"(f32, runtime);
     }
     fn @"f64.abs"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside f64.abs", .{});
+        try @"f.abs"(f64, runtime);
     }
     fn @"f64.neg"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside f64.neg", .{});
+        try @"f.neg"(f64, runtime);
     }
     fn @"f64.ceil"(runtime: *Runtime) !void {
         try @"f.ceil"(f64, runtime);
@@ -918,9 +932,9 @@ const InstructionFunctions = struct {
     fn @"f64.max"(runtime: *Runtime) !void {
         try @"f.max"(f64, runtime);
     }
+
     fn @"f64.copysign"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside f64.copysign", .{});
+        try @"f.copysign"(f64, runtime);
     }
     fn @"i32.wrap_i64"(runtime: *Runtime) !void {
         _ = runtime;

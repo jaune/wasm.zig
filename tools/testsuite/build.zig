@@ -41,9 +41,11 @@ pub fn build(b: *std.Build) !void {
 
 const base_filenames = [_][]const u8{
     "f32",
+    "f32_bitwise",
     "f32_cmp",
     "f64",
     "f64_cmp",
+    "f64_bitwise",
     "i32",
     "i64",
 };
