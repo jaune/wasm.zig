@@ -241,7 +241,13 @@ fn assertReturn(allocator: std.mem.Allocator, mod: *const module.Module, command
                 }).toRuntimeValue();
 
                 std.log.err("{s}: {d}: expected={}, given={} ", .{ action.field, command.line, erv, r });
-                std.log.err("expected=b{b}, given=b{b}", .{ @as(u32, @bitCast(erv.f32)), @as(u32, @bitCast(r.f32)) });
+
+                switch (erv) {
+                    .f32 => std.log.err("expected=b{b}, given=b{b}", .{ @as(u32, @bitCast(erv.f32)), @as(u32, @bitCast(r.f32)) }),
+                    .f64 => std.log.err("expected=b{b}, given=b{b}", .{ @as(u64, @bitCast(erv.f64)), @as(u64, @bitCast(r.f64)) }),
+                    .i32 => std.log.err("expected=b{b}, given=b{b}", .{ @as(u32, @bitCast(erv.i32)), @as(u32, @bitCast(r.i32)) }),
+                    .i64 => std.log.err("expected=b{b}, given=b{b}", .{ @as(u64, @bitCast(erv.i64)), @as(u64, @bitCast(r.i64)) }),
+                }
             } else {
                 std.log.err("{s}: {d}: expected=<null>({s}), given={} ", .{ action.field, command.line, e.type, r });
             }
