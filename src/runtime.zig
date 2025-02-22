@@ -251,41 +251,98 @@ const InstructionFunctions = struct {
     pub fn @"local.set"(runtime: *Runtime, localidx: u32) !void {
         _ = runtime;
         _ = localidx;
+
+        return error.NotImplementedYet;
     }
 
     pub fn @"local.tee"(runtime: *Runtime, localidx: u32) !void {
         _ = runtime;
         _ = localidx;
+
+        return error.NotImplementedYet;
     }
 
     pub fn @"global.get"(runtime: *Runtime, globalidx: u32) !void {
         _ = runtime;
         _ = globalidx;
+
+        return error.NotImplementedYet;
     }
 
     pub fn @"global.set"(runtime: *Runtime, globalidx: u32) !void {
         _ = runtime;
         _ = globalidx;
+
+        return error.NotImplementedYet;
     }
 
     pub fn @"i32.const"(runtime: *Runtime, value: i32) !void {
         _ = runtime;
         _ = value;
+
+        return error.NotImplementedYet;
     }
 
     pub fn @"i64.const"(runtime: *Runtime, value: i64) !void {
         _ = runtime;
         _ = value;
+
+        return error.NotImplementedYet;
     }
 
     pub fn @"f32.const"(runtime: *Runtime, value: f32) !void {
         _ = runtime;
         _ = value;
+
+        return error.NotImplementedYet;
     }
 
     pub fn @"f64.const"(runtime: *Runtime, value: f64) !void {
         _ = runtime;
         _ = value;
+
+        return error.NotImplementedYet;
+    }
+
+    fn @"n.eq"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+
+        try runtime.pushValue(i32, if (a == b) 1 else 0);
+    }
+    fn @"n.ne"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+
+        try runtime.pushValue(i32, if (a != b) 1 else 0);
+    }
+
+    fn @"n.lt"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+
+        try runtime.pushValue(i32, if (b < a) 1 else 0);
+    }
+
+    fn @"n.gt"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+
+        try runtime.pushValue(i32, if (b > a) 1 else 0);
+    }
+
+    fn @"n.le"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+
+        try runtime.pushValue(i32, if (b <= a) 1 else 0);
+    }
+
+    fn @"n.ge"(comptime T: type, runtime: *Runtime) !void {
+        const a = runtime.popValue(T);
+        const b = runtime.popValue(T);
+
+        try runtime.pushValue(i32, if (b >= a) 1 else 0);
     }
 
     fn @"i.eqz"(comptime T: type, runtime: *Runtime) !void {
@@ -293,23 +350,8 @@ const InstructionFunctions = struct {
 
         try runtime.pushValue(i32, if (a == 0) 1 else 0);
     }
-    fn @"i.eq"(comptime T: type, runtime: *Runtime) !void {
-        const a = runtime.popValue(T);
-        const b = runtime.popValue(T);
-
-        try runtime.pushValue(i32, if (a == b) 1 else 0);
-    }
-    fn @"i.ne"(comptime T: type, runtime: *Runtime) !void {
-        const a = runtime.popValue(T);
-        const b = runtime.popValue(T);
-
-        try runtime.pushValue(i32, if (a != b) 1 else 0);
-    }
     fn @"i.lt_s"(comptime T: type, runtime: *Runtime) !void {
-        const a = runtime.popValue(T);
-        const b = runtime.popValue(T);
-
-        try runtime.pushValue(i32, if (b < a) 1 else 0);
+        try @"n.lt"(T, runtime);
     }
     fn @"i.lt_u"(comptime T: type, runtime: *Runtime) !void {
         const a = runtime.popValue(T);
@@ -319,10 +361,7 @@ const InstructionFunctions = struct {
         try runtime.pushValue(i32, if (@as(UnsignedType, @bitCast(b)) < @as(UnsignedType, @bitCast(a))) 1 else 0);
     }
     fn @"i.gt_s"(comptime T: type, runtime: *Runtime) !void {
-        const a = runtime.popValue(T);
-        const b = runtime.popValue(T);
-
-        try runtime.pushValue(i32, if (b > a) 1 else 0);
+        try @"n.gt"(T, runtime);
     }
     fn @"i.gt_u"(comptime T: type, runtime: *Runtime) !void {
         const a = runtime.popValue(T);
@@ -332,10 +371,7 @@ const InstructionFunctions = struct {
         try runtime.pushValue(i32, if (@as(UnsignedType, @bitCast(b)) > @as(UnsignedType, @bitCast(a))) 1 else 0);
     }
     fn @"i.le_s"(comptime T: type, runtime: *Runtime) !void {
-        const a = runtime.popValue(T);
-        const b = runtime.popValue(T);
-
-        try runtime.pushValue(i32, if (b <= a) 1 else 0);
+        try @"n.le"(T, runtime);
     }
     fn @"i.le_u"(comptime T: type, runtime: *Runtime) !void {
         const a = runtime.popValue(T);
@@ -345,10 +381,7 @@ const InstructionFunctions = struct {
         try runtime.pushValue(i32, if (@as(UnsignedType, @bitCast(b)) <= @as(UnsignedType, @bitCast(a))) 1 else 0);
     }
     fn @"i.ge_s"(comptime T: type, runtime: *Runtime) !void {
-        const a = runtime.popValue(T);
-        const b = runtime.popValue(T);
-
-        try runtime.pushValue(i32, if (b >= a) 1 else 0);
+        try @"n.ge"(T, runtime);
     }
     fn @"i.ge_u"(comptime T: type, runtime: *Runtime) !void {
         const a = runtime.popValue(T);
@@ -476,10 +509,10 @@ const InstructionFunctions = struct {
         try @"i.eqz"(i32, runtime);
     }
     fn @"i32.eq"(runtime: *Runtime) !void {
-        try @"i.eq"(i32, runtime);
+        try @"n.eq"(i32, runtime);
     }
     fn @"i32.ne"(runtime: *Runtime) !void {
-        try @"i.ne"(i32, runtime);
+        try @"n.ne"(i32, runtime);
     }
     fn @"i32.lt_s"(runtime: *Runtime) !void {
         try @"i.lt_s"(i32, runtime);
@@ -567,10 +600,10 @@ const InstructionFunctions = struct {
         try @"i.eqz"(i64, runtime);
     }
     fn @"i64.eq"(runtime: *Runtime) !void {
-        try @"i.eq"(i64, runtime);
+        try @"n.eq"(i64, runtime);
     }
     fn @"i64.ne"(runtime: *Runtime) !void {
-        try @"i.ne"(i64, runtime);
+        try @"n.ne"(i64, runtime);
     }
     fn @"i64.lt_s"(runtime: *Runtime) !void {
         try @"i.lt_s"(i64, runtime);
@@ -682,52 +715,40 @@ const InstructionFunctions = struct {
     }
 
     fn @"f32.eq"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside f32.eq", .{});
+        try @"n.eq"(f32, runtime);
     }
     fn @"f32.ne"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside f32.ne", .{});
+        try @"n.ne"(f32, runtime);
     }
     fn @"f32.lt"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside f32.lt", .{});
+        try @"n.lt"(f32, runtime);
     }
     fn @"f32.gt"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside f32.gt", .{});
+        try @"n.gt"(f32, runtime);
     }
     fn @"f32.le"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside f32.le", .{});
+        try @"n.le"(f32, runtime);
     }
     fn @"f32.ge"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside f32.ge", .{});
+        try @"n.ge"(f32, runtime);
     }
     fn @"f64.eq"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside f64.eq", .{});
+        try @"n.eq"(f64, runtime);
     }
     fn @"f64.ne"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside f64.ne", .{});
+        try @"n.ne"(f64, runtime);
     }
     fn @"f64.lt"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside f64.lt", .{});
+        try @"n.lt"(f64, runtime);
     }
     fn @"f64.gt"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside f64.gt", .{});
+        try @"n.gt"(f64, runtime);
     }
     fn @"f64.le"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside f64.le", .{});
+        try @"n.le"(f64, runtime);
     }
     fn @"f64.ge"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside f64.ge", .{});
+        try @"n.ge"(f64, runtime);
     }
 
     fn @"f32.abs"(runtime: *Runtime) !void {

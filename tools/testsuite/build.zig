@@ -41,9 +41,11 @@ pub fn build(b: *std.Build) !void {
 
 const base_filenames = [_][]const u8{
     "f32",
+    "f32_cmp",
+    "f64",
+    "f64_cmp",
     "i32",
     "i64",
-    "f64",
 };
 
 const AddWastJsonRunner = struct {
