@@ -181,7 +181,15 @@ pub fn invokeFunction(m: *const Module, runtime: *Runtime, func_idx: u32, parame
                 results[i] = switch (value) {
                     .i32 => value,
                     else => {
-                        return error.InvalidParameterType;
+                        return error.InvalidResultType;
+                    },
+                };
+            },
+            .i64 => {
+                results[i] = switch (value) {
+                    .i64 => value,
+                    else => {
+                        return error.InvalidResultType;
                     },
                 };
             },
@@ -189,7 +197,7 @@ pub fn invokeFunction(m: *const Module, runtime: *Runtime, func_idx: u32, parame
                 results[i] = switch (value) {
                     .f32 => value,
                     else => {
-                        return error.InvalidParameterType;
+                        return error.InvalidResultType;
                     },
                 };
             },
@@ -266,70 +274,71 @@ const InstructionFunctions = struct {
     fn @"i.eqz"(comptime T: type, runtime: *Runtime) !void {
         const a = runtime.popValue(T);
 
-        try runtime.pushValue(T, if (a == 0) 1 else 0);
+        try runtime.pushValue(i32, if (a == 0) 1 else 0);
     }
     fn @"i.eq"(comptime T: type, runtime: *Runtime) !void {
         const a = runtime.popValue(T);
         const b = runtime.popValue(T);
 
-        try runtime.pushValue(T, if (a == b) 1 else 0);
+        try runtime.pushValue(i32, if (a == b) 1 else 0);
     }
     fn @"i.ne"(comptime T: type, runtime: *Runtime) !void {
         const a = runtime.popValue(T);
         const b = runtime.popValue(T);
 
-        try runtime.pushValue(T, if (a != b) 1 else 0);
+        try runtime.pushValue(i32, if (a != b) 1 else 0);
     }
     fn @"i.lt_s"(comptime T: type, runtime: *Runtime) !void {
         const a = runtime.popValue(T);
         const b = runtime.popValue(T);
 
-        try runtime.pushValue(T, if (b < a) 1 else 0);
+        try runtime.pushValue(i32, if (b < a) 1 else 0);
     }
     fn @"i.lt_u"(comptime T: type, runtime: *Runtime) !void {
         const a = runtime.popValue(T);
         const b = runtime.popValue(T);
         const UnsignedType: type = std.meta.Int(.unsigned, @bitSizeOf(T));
 
-        try runtime.pushValue(T, if (@as(UnsignedType, @bitCast(b)) < @as(UnsignedType, @bitCast(a))) 1 else 0);
+        try runtime.pushValue(i32, if (@as(UnsignedType, @bitCast(b)) < @as(UnsignedType, @bitCast(a))) 1 else 0);
     }
     fn @"i.gt_s"(comptime T: type, runtime: *Runtime) !void {
         const a = runtime.popValue(T);
         const b = runtime.popValue(T);
 
-        try runtime.pushValue(T, if (b > a) 1 else 0);
+        try runtime.pushValue(i32, if (b > a) 1 else 0);
     }
     fn @"i.gt_u"(comptime T: type, runtime: *Runtime) !void {
         const a = runtime.popValue(T);
         const b = runtime.popValue(T);
         const UnsignedType: type = std.meta.Int(.unsigned, @bitSizeOf(T));
 
-        try runtime.pushValue(T, if (@as(UnsignedType, @bitCast(b)) > @as(UnsignedType, @bitCast(a))) 1 else 0);
+        try runtime.pushValue(i32, if (@as(UnsignedType, @bitCast(b)) > @as(UnsignedType, @bitCast(a))) 1 else 0);
     }
     fn @"i.le_s"(comptime T: type, runtime: *Runtime) !void {
         const a = runtime.popValue(T);
         const b = runtime.popValue(T);
 
-        try runtime.pushValue(T, if (b <= a) 1 else 0);
+        try runtime.pushValue(i32, if (b <= a) 1 else 0);
     }
     fn @"i.le_u"(comptime T: type, runtime: *Runtime) !void {
         const a = runtime.popValue(T);
         const b = runtime.popValue(T);
+        const UnsignedType: type = std.meta.Int(.unsigned, @bitSizeOf(T));
 
-        try runtime.pushValue(T, if (@as(u32, @bitCast(b)) <= @as(u32, @bitCast(a))) 1 else 0);
+        try runtime.pushValue(i32, if (@as(UnsignedType, @bitCast(b)) <= @as(UnsignedType, @bitCast(a))) 1 else 0);
     }
     fn @"i.ge_s"(comptime T: type, runtime: *Runtime) !void {
         const a = runtime.popValue(T);
         const b = runtime.popValue(T);
 
-        try runtime.pushValue(T, if (b >= a) 1 else 0);
+        try runtime.pushValue(i32, if (b >= a) 1 else 0);
     }
     fn @"i.ge_u"(comptime T: type, runtime: *Runtime) !void {
         const a = runtime.popValue(T);
         const b = runtime.popValue(T);
         const UnsignedType: type = std.meta.Int(.unsigned, @bitSizeOf(T));
 
-        try runtime.pushValue(T, if (@as(UnsignedType, @bitCast(b)) >= @as(UnsignedType, @bitCast(a))) 1 else 0);
+        try runtime.pushValue(i32, if (@as(UnsignedType, @bitCast(b)) >= @as(UnsignedType, @bitCast(a))) 1 else 0);
     }
 
     fn @"i.and"(comptime T: type, runtime: *Runtime) !void {
@@ -479,7 +488,6 @@ const InstructionFunctions = struct {
     fn @"i32.ge_u"(runtime: *Runtime) !void {
         try @"i.ge_u"(i32, runtime);
     }
-
     fn @"i32.and"(runtime: *Runtime) !void {
         try @"i.and"(i32, runtime);
     }
@@ -504,11 +512,9 @@ const InstructionFunctions = struct {
     fn @"i32.rotr"(runtime: *Runtime) !void {
         try @"i.rotr"(i32, runtime);
     }
-
     fn @"i32.clz"(runtime: *Runtime) !void {
         try @"i.clz"(i32, runtime);
     }
-
     fn @"i32.ctz"(runtime: *Runtime) !void {
         try @"i.ctz"(i32, runtime);
     }
@@ -541,48 +547,121 @@ const InstructionFunctions = struct {
     }
 
     fn @"i64.eqz"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside i64.eqz", .{});
+        try @"i.eqz"(i64, runtime);
     }
     fn @"i64.eq"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside i64.eq", .{});
+        try @"i.eq"(i64, runtime);
     }
     fn @"i64.ne"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside i64.ne", .{});
+        try @"i.ne"(i64, runtime);
     }
     fn @"i64.lt_s"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside i64.lt_s", .{});
+        try @"i.lt_s"(i64, runtime);
     }
     fn @"i64.lt_u"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside i64.lt_u", .{});
+        try @"i.lt_u"(i64, runtime);
     }
     fn @"i64.gt_s"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside i64.gt_s", .{});
+        try @"i.gt_s"(i64, runtime);
     }
     fn @"i64.gt_u"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside i64.gt_u", .{});
+        try @"i.gt_u"(i64, runtime);
     }
     fn @"i64.le_s"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside i64.le_s", .{});
+        try @"i.le_s"(i64, runtime);
     }
     fn @"i64.le_u"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside i64.le_u", .{});
+        try @"i.le_u"(i64, runtime);
     }
     fn @"i64.ge_s"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside i64.ge_s", .{});
+        try @"i.ge_s"(i64, runtime);
     }
     fn @"i64.ge_u"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside i64.ge_u", .{});
+        try @"i.ge_u"(i64, runtime);
+    }
+    fn @"i64.and"(runtime: *Runtime) !void {
+        try @"i.and"(i64, runtime);
+    }
+    fn @"i64.or"(runtime: *Runtime) !void {
+        try @"i.or"(i64, runtime);
+    }
+    fn @"i64.xor"(runtime: *Runtime) !void {
+        try @"i.xor"(i64, runtime);
+    }
+    fn @"i64.shl"(runtime: *Runtime) !void {
+        try @"i.shl"(i64, runtime);
+    }
+    fn @"i64.shr_s"(runtime: *Runtime) !void {
+        try @"i.shr_s"(i64, runtime);
+    }
+    fn @"i64.shr_u"(runtime: *Runtime) !void {
+        try @"i.shr_u"(i64, runtime);
+    }
+    fn @"i64.rotl"(runtime: *Runtime) !void {
+        try @"i.rotl"(i64, runtime);
+    }
+    fn @"i64.rotr"(runtime: *Runtime) !void {
+        try @"i.rotr"(i64, runtime);
+    }
+    fn @"i64.clz"(runtime: *Runtime) !void {
+        try @"i.clz"(i64, runtime);
+    }
+    fn @"i64.ctz"(runtime: *Runtime) !void {
+        try @"i.ctz"(i64, runtime);
+    }
+    fn @"i64.popcnt"(runtime: *Runtime) !void {
+        try @"i.popcnt"(i64, runtime);
+    }
+    fn @"i64.add"(runtime: *Runtime) !void {
+        try @"i.add"(i64, runtime);
+    }
+    fn @"i64.sub"(runtime: *Runtime) !void {
+        try @"i.sub"(i64, runtime);
+    }
+    fn @"i64.mul"(runtime: *Runtime) !void {
+        try @"i.mul"(i64, runtime);
+    }
+    fn @"i64.div_s"(runtime: *Runtime) !void {
+        try @"i.div_s"(i64, runtime);
+    }
+
+    fn @"i64.div_u"(runtime: *Runtime) !void {
+        try @"i.div_u"(i64, runtime);
+    }
+
+    fn @"i64.rem_s"(runtime: *Runtime) !void {
+        try @"i.rem_s"(i64, runtime);
+    }
+
+    fn @"i64.rem_u"(runtime: *Runtime) !void {
+        try @"i.rem_u"(i64, runtime);
+    }
+
+    fn @"i32.extend8_s"(runtime: *Runtime) !void {
+        const a = runtime.popValue(i32);
+
+        try runtime.pushValue(i32, @as(i8, @truncate(a)));
+    }
+    fn @"i32.extend16_s"(runtime: *Runtime) !void {
+        const a = runtime.popValue(i32);
+
+        try runtime.pushValue(i32, @as(i16, @truncate(a)));
+    }
+
+    fn @"i64.extend8_s"(runtime: *Runtime) !void {
+        const a = runtime.popValue(i64);
+
+        try runtime.pushValue(i64, @as(i8, @truncate(a)));
+    }
+    fn @"i64.extend16_s"(runtime: *Runtime) !void {
+        const a = runtime.popValue(i64);
+
+        try runtime.pushValue(i64, @as(i16, @truncate(a)));
+    }
+    fn @"i64.extend32_s"(runtime: *Runtime) !void {
+        const a = runtime.popValue(i64);
+
+        try runtime.pushValue(i64, @as(i32, @truncate(a)));
     }
 
     fn @"f32.eq"(runtime: *Runtime) !void {
@@ -634,78 +713,6 @@ const InstructionFunctions = struct {
         std.log.info("inside f64.ge", .{});
     }
 
-    fn @"i64.clz"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside i64.clz", .{});
-    }
-    fn @"i64.ctz"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside i64.ctz", .{});
-    }
-    fn @"i64.popcnt"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside i64.popcnt", .{});
-    }
-    fn @"i64.add"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside i64.add", .{});
-    }
-    fn @"i64.sub"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside i64.sub", .{});
-    }
-    fn @"i64.mul"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside i64.mul", .{});
-    }
-    fn @"i64.div_s"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside i64.div_s", .{});
-    }
-    fn @"i64.div_u"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside i64.div_u", .{});
-    }
-    fn @"i64.rem_s"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside i64.rem_s", .{});
-    }
-    fn @"i64.rem_u"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside i64.rem_u", .{});
-    }
-    fn @"i64.and"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside i64.and", .{});
-    }
-    fn @"i64.or"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside i64.or", .{});
-    }
-    fn @"i64.xor"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside i64.xor", .{});
-    }
-    fn @"i64.shl"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside i64.shl", .{});
-    }
-    fn @"i64.shr_s"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside i64.shr_s", .{});
-    }
-    fn @"i64.shr_u"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside i64.shr_u", .{});
-    }
-    fn @"i64.rotl"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside i64.rotl", .{});
-    }
-    fn @"i64.rotr"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside i64.rotr", .{});
-    }
     fn @"f32.abs"(runtime: *Runtime) !void {
         _ = runtime;
         std.log.info("inside f32.abs", .{});
@@ -714,6 +721,7 @@ const InstructionFunctions = struct {
         _ = runtime;
         std.log.info("inside f32.neg", .{});
     }
+
     fn @"f32.ceil"(runtime: *Runtime) !void {
         const a = runtime.popValue(f32);
 
@@ -953,28 +961,6 @@ const InstructionFunctions = struct {
         _ = runtime;
         std.log.info("inside f64.reinterpret_i64", .{});
     }
-    fn @"i32.extend8_s"(runtime: *Runtime) !void {
-        const a = runtime.popValue(i32);
-
-        try runtime.pushValue(i32, @as(i8, @truncate(a)));
-    }
-    fn @"i32.extend16_s"(runtime: *Runtime) !void {
-        const a = runtime.popValue(i32);
-
-        try runtime.pushValue(i32, @as(i16, @truncate(a)));
-    }
-    fn @"i64.extend8_s"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside i64.extend8_s", .{});
-    }
-    fn @"i64.extend16_s"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside i64.extend16_s", .{});
-    }
-    fn @"i64.extend32_s"(runtime: *Runtime) !void {
-        _ = runtime;
-        std.log.info("inside i64.extend32_s", .{});
-    }
 
     fn end(runtime: *Runtime) !void {
         _ = runtime;
@@ -1020,6 +1006,7 @@ fn intRotl(comptime T: type, lhs: T, rhs: T) !T {
     const UnsignedType = std.meta.Int(.unsigned, @bitSizeOf(T));
     const num: UnsignedType = @bitCast(lhs);
     const res = std.math.rotl(UnsignedType, num, rhs);
+
     return @bitCast(res);
 }
 
@@ -1028,6 +1015,7 @@ fn intRotr(comptime T: type, lhs: T, rhs: T) !T {
     const UnsignedType = std.meta.Int(.unsigned, @bitSizeOf(T));
     const num: UnsignedType = @bitCast(lhs);
     const res = std.math.rotr(UnsignedType, num, rhs);
+
     return @bitCast(res);
 }
 
