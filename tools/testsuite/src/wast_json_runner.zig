@@ -3,117 +3,7 @@ const std = @import("std");
 const wasm = @import("jaune:wasm-runtime");
 const runtime = wasm.runtime;
 const module = wasm.module;
-
-const JsonWast = struct {
-    const ExpectedValue = struct {
-        type: []u8,
-        value: ?[]u8 = null,
-
-        fn testRuntimeValue(self: ExpectedValue, other: runtime.Value) !bool {
-            if (self.value) |value| {
-                if (std.mem.eql(u8, value, "nan:arithmetic")) {
-                    return switch (other) {
-                        .f32 => |v| std.math.isNan(v),
-                        .f64 => |v| std.math.isNan(v),
-                        else => error.UnsupportedType,
-                    };
-                } else if (std.mem.eql(u8, value, "nan:canonical")) {
-                    return switch (other) {
-                        .f32 => |v| std.math.isNan(v),
-                        .f64 => |v| std.math.isNan(v),
-                        else => error.UnsupportedType,
-                    };
-                } else {
-                    const jv = Value{
-                        .type = self.type,
-                        .value = value,
-                    };
-                    const rv = try jv.toRuntimeValue();
-
-                    switch (rv) {
-                        .i32, .i64 => {
-                            return rv.eql(other);
-                        },
-                        .f32 => |f| {
-                            if (std.math.isNan(f) and std.math.isNan(other.f32)) {
-                                return true;
-                            }
-                            return rv.eql(other);
-                        },
-                        .f64 => |f| {
-                            if (std.math.isNan(f) and std.math.isNan(other.f64)) {
-                                return true;
-                            }
-                            return rv.eql(other);
-                        },
-                        else => return error.UnsupportedValue,
-                    }
-                }
-            } else {
-                return false;
-            }
-        }
-    };
-
-    const Value = struct {
-        type: []u8,
-        value: []u8,
-
-        fn toRuntimeValue(self: Value) !runtime.Value {
-            if (std.mem.eql(u8, self.type, "f32")) {
-                const parsed = try std.fmt.parseUnsigned(u32, self.value, 10);
-
-                return .{
-                    .f32 = @as(f32, @bitCast(parsed)),
-                };
-            }
-            if (std.mem.eql(u8, self.type, "f64")) {
-                const parsed = try std.fmt.parseUnsigned(u64, self.value, 10);
-
-                return .{
-                    .f64 = @as(f64, @bitCast(parsed)),
-                };
-            }
-            if (std.mem.eql(u8, self.type, "i32")) {
-                const parsed = try std.fmt.parseUnsigned(u32, self.value, 10);
-
-                return .{
-                    .i32 = @as(i32, @bitCast(parsed)),
-                };
-            }
-            if (std.mem.eql(u8, self.type, "i64")) {
-                const parsed = try std.fmt.parseUnsigned(u64, self.value, 10);
-
-                return .{
-                    .i64 = @as(i64, @bitCast(parsed)),
-                };
-            }
-
-            return error.UnsupportedValue;
-        }
-    };
-
-    const Action = struct {
-        type: []u8,
-        field: []u8,
-        args: []Value,
-    };
-
-    const Command = struct {
-        type: []u8,
-        line: u32,
-        filename: ?[]u8 = null,
-
-        text: ?[]u8 = null,
-        module_type: ?[]u8 = null,
-
-        action: ?Action = null,
-        expected: ?[]ExpectedValue = null,
-    };
-
-    commands: []Command,
-    source_filename: []const u8,
-};
+const BinaryModuleReader = wasm.BinaryModuleReader;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -183,7 +73,7 @@ pub fn main() !void {
 
             const reader = file.reader();
 
-            const mod = try module.Module.readAlloc(allocator, reader);
+            const mod = try BinaryModuleReader.readAllAlloc(allocator, reader);
 
             current_module = mod;
         } else if (std.mem.eql(u8, command.type, "assert_return")) {
@@ -348,3 +238,114 @@ fn assertReturn(allocator: std.mem.Allocator, mod: *const module.Module, command
         }
     }
 }
+
+const JsonWast = struct {
+    const ExpectedValue = struct {
+        type: []u8,
+        value: ?[]u8 = null,
+
+        fn testRuntimeValue(self: ExpectedValue, other: runtime.Value) !bool {
+            if (self.value) |value| {
+                if (std.mem.eql(u8, value, "nan:arithmetic")) {
+                    return switch (other) {
+                        .f32 => |v| std.math.isNan(v),
+                        .f64 => |v| std.math.isNan(v),
+                        else => error.UnsupportedType,
+                    };
+                } else if (std.mem.eql(u8, value, "nan:canonical")) {
+                    return switch (other) {
+                        .f32 => |v| std.math.isNan(v),
+                        .f64 => |v| std.math.isNan(v),
+                        else => error.UnsupportedType,
+                    };
+                } else {
+                    const jv = Value{
+                        .type = self.type,
+                        .value = value,
+                    };
+                    const rv = try jv.toRuntimeValue();
+
+                    switch (rv) {
+                        .i32, .i64 => {
+                            return rv.eql(other);
+                        },
+                        .f32 => |f| {
+                            if (std.math.isNan(f) and std.math.isNan(other.f32)) {
+                                return true;
+                            }
+                            return rv.eql(other);
+                        },
+                        .f64 => |f| {
+                            if (std.math.isNan(f) and std.math.isNan(other.f64)) {
+                                return true;
+                            }
+                            return rv.eql(other);
+                        },
+                        else => return error.UnsupportedValue,
+                    }
+                }
+            } else {
+                return false;
+            }
+        }
+    };
+
+    const Value = struct {
+        type: []u8,
+        value: []u8,
+
+        fn toRuntimeValue(self: Value) !runtime.Value {
+            if (std.mem.eql(u8, self.type, "f32")) {
+                const parsed = try std.fmt.parseUnsigned(u32, self.value, 10);
+
+                return .{
+                    .f32 = @as(f32, @bitCast(parsed)),
+                };
+            }
+            if (std.mem.eql(u8, self.type, "f64")) {
+                const parsed = try std.fmt.parseUnsigned(u64, self.value, 10);
+
+                return .{
+                    .f64 = @as(f64, @bitCast(parsed)),
+                };
+            }
+            if (std.mem.eql(u8, self.type, "i32")) {
+                const parsed = try std.fmt.parseUnsigned(u32, self.value, 10);
+
+                return .{
+                    .i32 = @as(i32, @bitCast(parsed)),
+                };
+            }
+            if (std.mem.eql(u8, self.type, "i64")) {
+                const parsed = try std.fmt.parseUnsigned(u64, self.value, 10);
+
+                return .{
+                    .i64 = @as(i64, @bitCast(parsed)),
+                };
+            }
+
+            return error.UnsupportedValue;
+        }
+    };
+
+    const Action = struct {
+        type: []u8,
+        field: []u8,
+        args: []Value,
+    };
+
+    const Command = struct {
+        type: []u8,
+        line: u32,
+        filename: ?[]u8 = null,
+
+        text: ?[]u8 = null,
+        module_type: ?[]u8 = null,
+
+        action: ?Action = null,
+        expected: ?[]ExpectedValue = null,
+    };
+
+    commands: []Command,
+    source_filename: []const u8,
+};
