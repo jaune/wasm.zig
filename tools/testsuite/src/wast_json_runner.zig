@@ -46,6 +46,7 @@ const JsonWast = struct {
                             }
                             return rv.eql(other);
                         },
+                        else => return error.UnsupportedValue,
                     }
                 }
             } else {
@@ -111,6 +112,7 @@ const JsonWast = struct {
     };
 
     commands: []Command,
+    source_filename: []const u8,
 };
 
 pub fn main() !void {
@@ -132,7 +134,7 @@ pub fn main() !void {
         return error.NoInputDirectory;
     };
 
-    std.log.info("input_path: {s}", .{input_path});
+    std.log.info("json_path: {s}", .{input_path});
 
     const input_file = try std.fs.cwd().openFile(input_path, .{});
     defer input_file.close();
@@ -151,6 +153,8 @@ pub fn main() !void {
         return error.JsonWastParsingFail;
     };
     defer input_parsed.deinit();
+
+    std.log.info("wast_path: {s}", .{input_parsed.value.source_filename});
 
     var current_module: ?module.Module = null;
     errdefer {
@@ -254,7 +258,7 @@ fn assertTrap(allocator: std.mem.Allocator, mod: *const module.Module, command: 
 
     runtime.invokeFunction(mod, &rt, fn_index, parameters, results) catch |given| {
         if (given != expected) {
-            std.log.err("{s}: assert_trap: {d}: expected={}, given={} ", .{ action.field, command.line, expected, given });
+            std.log.err("assert_trap: {s}: {d}: expected={}, given={} ", .{ action.field, command.line, expected, given });
             return error.Fail;
         }
     };
@@ -307,7 +311,7 @@ fn assertReturn(allocator: std.mem.Allocator, mod: *const module.Module, command
     defer allocator.free(results);
 
     runtime.invokeFunction(mod, &rt, fn_index, parameters, results) catch |err| {
-        std.log.err("{s}: assert_return: {d}: error: {}", .{ action.field, command.line, err });
+        std.log.err("assert_return: {s}: {d}: error: {}", .{ action.field, command.line, err });
 
         for (parameters, 0..) |p, i| {
             std.log.err("{d}: {}", .{ i, p });
@@ -323,16 +327,17 @@ fn assertReturn(allocator: std.mem.Allocator, mod: *const module.Module, command
                     .value = ev,
                 }).toRuntimeValue();
 
-                std.log.err("{s}: assert_return: {d}: expected={}, given={} ", .{ action.field, command.line, erv, r });
+                std.log.err("assert_return: {s}: {d}: expected={}, given={} ", .{ action.field, command.line, erv, r });
 
                 switch (erv) {
                     .f32 => std.log.err("expected=b{b}, given=b{b}", .{ @as(u32, @bitCast(erv.f32)), @as(u32, @bitCast(r.f32)) }),
                     .f64 => std.log.err("expected=b{b}, given=b{b}", .{ @as(u64, @bitCast(erv.f64)), @as(u64, @bitCast(r.f64)) }),
                     .i32 => std.log.err("expected=b{b}, given=b{b}", .{ @as(u32, @bitCast(erv.i32)), @as(u32, @bitCast(r.i32)) }),
                     .i64 => std.log.err("expected=b{b}, given=b{b}", .{ @as(u64, @bitCast(erv.i64)), @as(u64, @bitCast(r.i64)) }),
+                    else => return error.UnsupportedValueType,
                 }
             } else {
-                std.log.err("{s}: assert_return: {d}: expected=<null>({s}), given={} ", .{ action.field, command.line, e.type, r });
+                std.log.err("assert_return: {s}: {d}: expected=<null>({s}), given={} ", .{ action.field, command.line, e.type, r });
             }
 
             for (parameters, 0..) |p, i| {

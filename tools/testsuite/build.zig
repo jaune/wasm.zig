@@ -49,6 +49,7 @@ const base_filenames = [_][]const u8{
     "i32",
     "i64",
     "conversions",
+    // "local_get",
 };
 
 const AddWastJsonRunner = struct {

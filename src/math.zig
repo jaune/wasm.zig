@@ -107,3 +107,29 @@ pub fn floatNearest(comptime T: type, value: T) !T {
 
     return val;
 }
+
+// CREDIT: https://github.com/safx/zig-tiny-wasm-runtime
+pub fn intShl(comptime T: type, lhs: T, rhs: T) !T {
+    const Log2T: type = comptime std.meta.Int(.unsigned, std.math.log2(@typeInfo(T).Int.bits));
+
+    const shift = try std.math.mod(T, rhs, @bitSizeOf(T));
+
+    const casted = std.math.cast(Log2T, shift) orelse {
+        return error.TooBig;
+    };
+
+    return lhs << casted;
+}
+
+// CREDIT: https://github.com/safx/zig-tiny-wasm-runtime
+pub fn intShr(comptime T: type, lhs: T, rhs: T) !T {
+    const Log2T: type = comptime std.meta.Int(.unsigned, std.math.log2(@typeInfo(T).Int.bits));
+
+    const shift = try std.math.mod(T, rhs, @bitSizeOf(T));
+
+    const casted = std.math.cast(Log2T, shift) orelse {
+        return error.TooBig;
+    };
+
+    return lhs >> casted;
+}

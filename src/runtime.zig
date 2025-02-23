@@ -1,17 +1,23 @@
 const std = @import("std");
 
 const Module = @import("./module.zig").Module;
+pub const ValueType = @import("./module.zig").ValueType;
+
 const Instruction = @import("./module.zig").Instruction;
 const InstructionTag = @import("./module.zig").InstructionTag;
 const FunctionType = @import("./module.zig").FunctionType;
 
 const InstructionFunctions = @import("./instruction_functions.zig");
 
-pub const Value = union(enum) {
+pub const Value = union(ValueType) {
     i32: i32,
     i64: i64,
     f32: f32,
     f64: f64,
+
+    v128: void,
+    function_reference: void,
+    extern_reference: void,
 
     pub fn eql(a: Value, b: Value) bool {
         if (std.meta.activeTag(a) != std.meta.activeTag(b)) {
@@ -23,43 +29,80 @@ pub const Value = union(enum) {
             .i64 => a.i64 == b.i64,
             .f32 => a.f32 == b.f32,
             .f64 => a.f64 == b.f64,
+            else => false,
         };
     }
 };
 
 pub const Runtime = struct {
-    const Len: type = std.math.IntFittingRange(0, 1024);
+    const ValueStackLength: type = std.math.IntFittingRange(0, 1024);
     const ValueStackType = std.BoundedArray(Value, 1024);
 
-    const CallStackEntry = struct {
-        locals_start: Len,
-        locals_length: Len,
+    const FrameKind = enum {
+        block,
+        call,
     };
-    const CallStackType = std.BoundedArray(CallStackEntry, 1024);
+
+    pub const Frame = struct {
+        kind: FrameKind,
+
+        function_type: FunctionType,
+
+        results_start: ValueStackLength,
+        locals_start: ValueStackLength,
+        locals_length: ValueStackLength,
+    };
+    const CallStackType = std.BoundedArray(Frame, 1024);
 
     const Self = @This();
 
     call_stack: CallStackType,
     value_stack: ValueStackType,
 
-    pub fn popValue(self: *Self, comptime T: type) T {
-        switch (T) {
-            i32 => {
-                return self.value_stack.pop().i32;
+    pub fn peekCurrentFrame(self: *const Self) !*const Frame {
+        if (self.call_stack.len == 0) {
+            return error.CallStackEmpty;
+        }
+
+        return &self.call_stack.get(self.call_stack.len - 1);
+    }
+
+    pub fn popValuesIntoSlice(self: *Self, results: []Value) !void {
+        for (results) |*result| {
+            const value: Value = self.value_stack.popOrNull() orelse {
+                return error.ValueStackEmpty;
+            };
+
+            result.* = value;
+        }
+    }
+
+    pub fn popValue(self: *Self, comptime T: type) !T {
+        const value: Value = self.value_stack.popOrNull() orelse {
+            return error.ValueStackEmpty;
+        };
+
+        return switch (T) {
+            i32 => switch (value) {
+                .i32 => value.i32,
+                else => error.WrongType,
             },
-            i64 => {
-                return self.value_stack.pop().i64;
+            i64 => switch (value) {
+                .i64 => value.i64,
+                else => error.WrongType,
             },
-            f32 => {
-                return self.value_stack.pop().f32;
+            f32 => switch (value) {
+                .f32 => value.f32,
+                else => error.WrongType,
             },
-            f64 => {
-                return self.value_stack.pop().f64;
+            f64 => switch (value) {
+                .f64 => value.f64,
+                else => error.WrongType,
             },
             else => {
                 @compileError("Unsupported value type");
             },
-        }
+        };
     }
 
     pub fn pushValue(self: *Self, comptime T: type, value: T) !void {
@@ -93,6 +136,8 @@ pub const Runtime = struct {
 fn executeInstruction(runtime: *Runtime, instruction: Instruction) !void {
     switch (instruction) {
         inline else => |parameters, tag| {
+            // std.log.debug("execute {}", .{tag});
+
             const tag_name = comptime @tagName(tag);
             const func = comptime @field(InstructionFunctions, tag_name);
 
@@ -111,7 +156,7 @@ fn executeInstruction(runtime: *Runtime, instruction: Instruction) !void {
 }
 
 pub fn invokeFunction(m: *const Module, runtime: *Runtime, func_idx: u32, parameters: []const Value, results: []Value) !void {
-    const b = m.function_bodies[func_idx];
+    const function_body = m.function_bodies[func_idx];
     const function_type: FunctionType = m.function_types[m.function_type_indices[func_idx]];
 
     if (function_type.parameters.len != parameters.len) {
@@ -122,9 +167,21 @@ pub fn invokeFunction(m: *const Module, runtime: *Runtime, func_idx: u32, parame
         return error.WrongNumberOfResults;
     }
 
-    var frame = try runtime.call_stack.addOne();
+    const locals_length = std.math.cast(Runtime.ValueStackLength, function_body.locals.len) orelse {
+        return error.TooManyLocals;
+    };
 
-    frame.locals_start = runtime.value_stack.len;
+    const parameters_length = std.math.cast(Runtime.ValueStackLength, function_type.parameters.len) orelse {
+        return error.TooManyLocals;
+    };
+
+    try runtime.call_stack.append(.{
+        .kind = .call,
+        .results_start = runtime.value_stack.len + parameters_length + locals_length,
+        .locals_start = runtime.value_stack.len,
+        .locals_length = parameters_length + locals_length,
+        .function_type = function_type,
+    });
 
     for (function_type.parameters, 0..) |p, i| {
         switch (p) {
@@ -170,64 +227,31 @@ pub fn invokeFunction(m: *const Module, runtime: *Runtime, func_idx: u32, parame
         }
     }
 
-    const locals_end = runtime.value_stack.len;
-
-    frame.locals_length = locals_end - frame.locals_start;
-
-    for (b.expression) |instruction| {
-        try executeInstruction(runtime, instruction);
-    }
-
-    const expected_length = locals_end + function_type.results.len;
-
-    if (expected_length != runtime.value_stack.len) {
-        return error.WrongNumberOfResults;
-    }
-
-    for (function_type.results, 0..) |p, i| {
-        const value = runtime.value_stack.pop();
-
-        switch (p) {
+    for (function_body.locals) |l| {
+        switch (l.type) {
             .i32 => {
-                results[i] = switch (value) {
-                    .i32 => value,
-                    else => {
-                        return error.InvalidResultType;
-                    },
-                };
+                try runtime.pushValue(i32, 0);
             },
             .i64 => {
-                results[i] = switch (value) {
-                    .i64 => value,
-                    else => {
-                        return error.InvalidResultType;
-                    },
-                };
+                try runtime.pushValue(i64, 0);
             },
             .f32 => {
-                results[i] = switch (value) {
-                    .f32 => value,
-                    else => {
-                        return error.InvalidResultType;
-                    },
-                };
+                try runtime.pushValue(f32, 0);
             },
             .f64 => {
-                results[i] = switch (value) {
-                    .f64 => value,
-                    else => {
-                        return error.InvalidResultType;
-                    },
-                };
+                try runtime.pushValue(f64, 0);
             },
             else => {
-                return error.UnsupportedResultType;
+                return error.UnsupportedParameterType;
             },
         }
     }
 
-    runtime.value_stack.len -= frame.locals_length;
-    runtime.call_stack.len -= 1;
+    for (function_body.expression) |instruction| {
+        try executeInstruction(runtime, instruction);
+    }
+
+    try runtime.popValuesIntoSlice(results);
 
     if (runtime.value_stack.len != 0) {
         return error.UnfinishedBusiness;
