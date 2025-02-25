@@ -11,7 +11,10 @@ pub fn build(b: *std.Build) !void {
         .optimize = .ReleaseFast,
     });
 
-    const wabt_dep = b.dependency("wabt", .{});
+    const wabt_dep = b.dependency("wabt", .{
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
 
     const wast2json_exe = wabt_dep.artifact("wast2json");
 

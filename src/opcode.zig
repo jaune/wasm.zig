@@ -1,19 +1,11 @@
-pub const InstructionTag = enum {
+pub const Opcode = enum {
     @"unreachable",
     nop,
-
-    expression_end,
-
     block,
-    loop_end,
-
     loop,
-    block_end,
-
     @"if",
     @"else",
-    if_end,
-
+    end,
     br,
     br_if,
     br_table,

@@ -1,8 +1,8 @@
 const std = @import("std");
 
-const InstructionTag = @import("./instruction_tag.zig").InstructionTag;
+const Opcode = @import("./opcode.zig").Opcode;
 
-pub fn readInstructionTag(reader: anytype) !InstructionTag {
+pub fn readOpcode(reader: anytype) !Opcode {
     const op0 = try reader.readByte();
     switch (op0) {
         0x00 => {

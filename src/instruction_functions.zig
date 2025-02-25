@@ -6,15 +6,16 @@ const std = @import("std");
 const math = @import("./math.zig");
 
 pub fn @"local.get"(runtime: *Runtime, localidx: u32) !void {
-    const frame = try runtime.peekCurrentFrame();
+    const frame = try runtime.peekCurrentCall();
 
     if (localidx >= frame.locals_length) {
+        std.log.err("frame", .{});
+        std.log.err("{}", .{frame});
         std.log.err("value_stack:", .{});
         for (runtime.value_stack.slice()) |v| {
             std.log.err("  {}", .{v});
         }
 
-        std.log.warn("locals_length={}", .{frame.locals_length});
         std.log.err("localidx={} frame.locals_length={}", .{ localidx, frame.locals_length });
         return error.@"local.get: invalid local index";
     }
@@ -719,37 +720,6 @@ pub fn @"f64.copysign"(runtime: *Runtime) !void {
     try @"f.copysign"(f64, runtime);
 }
 
-pub fn end(runtime: *Runtime) !void {
-    const frame: Runtime.Frame = runtime.call_stack.popOrNull() orelse {
-        return error.NoFrameToEnd;
-    };
-    const expected_end = frame.results_start + frame.function_type.results.len;
-
-    if (expected_end != runtime.value_stack.len) {
-        std.log.err("kind={}, expected_end={}, end={}", .{ frame.kind, expected_end, runtime.value_stack.len });
-        return error.WrongValueStackSize;
-    }
-
-    for (frame.function_type.results, frame.results_start..) |result_type, i| {
-        const value: Value = runtime.value_stack.get(i);
-
-        if (result_type != std.meta.activeTag(value)) {
-            return error.WrongResultType;
-        }
-    }
-
-    switch (frame.kind) {
-        .block => {},
-        .call => {
-            const value_stack_slice = runtime.value_stack.slice();
-
-            std.mem.copyForwards(Value, value_stack_slice[frame.locals_start..], value_stack_slice[frame.results_start..(frame.results_start + frame.function_type.results.len)]);
-
-            runtime.value_stack.len -= frame.locals_length;
-        },
-    }
-}
-
 pub fn @"unreachable"(runtime: *Runtime) !void {
     _ = runtime;
     return error.NotImplementedYet;
@@ -757,21 +727,6 @@ pub fn @"unreachable"(runtime: *Runtime) !void {
 pub fn nop(runtime: *Runtime) !void {
     _ = runtime;
     return error.NotImplementedYet;
-}
-
-pub fn block(runtime: *Runtime) !void {
-    const frame = try runtime.peekCurrentFrame();
-
-    try runtime.call_stack.append(.{
-        .kind = .block,
-        .results_start = runtime.value_stack.len,
-        .locals_start = frame.locals_start,
-        .locals_length = frame.locals_length,
-        .function_type = .{
-            .parameters = &.{},
-            .results = &.{},
-        },
-    });
 }
 
 pub fn loop(runtime: *Runtime) !void {

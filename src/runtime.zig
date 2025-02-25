@@ -6,6 +6,11 @@ pub const ValueType = @import("./module.zig").ValueType;
 const Instruction = @import("./module.zig").Instruction;
 const InstructionTag = @import("./module.zig").InstructionTag;
 const FunctionType = @import("./module.zig").FunctionType;
+const Expression = @import("./module.zig").Expression;
+const FunctionTypeTndex = @import("./module.zig").FunctionTypeTndex;
+const InstructionIndex = @import("./module.zig").InstructionIndex;
+
+const ArgumentsTypeOfInstruction = @import("./module.zig").ArgumentsTypeOfInstruction;
 
 const InstructionFunctions = @import("./instruction_functions.zig");
 
@@ -38,33 +43,50 @@ pub const Runtime = struct {
     const ValueStackLength: type = std.math.IntFittingRange(0, 1024);
     const ValueStackType = std.BoundedArray(Value, 1024);
 
-    const FrameKind = enum {
-        block,
-        call,
-    };
-
-    pub const Frame = struct {
-        kind: FrameKind,
-
-        function_type: FunctionType,
-
+    pub const CallStackEntry = struct {
         results_start: ValueStackLength,
         locals_start: ValueStackLength,
         locals_length: ValueStackLength,
+        function_type_index: FunctionTypeTndex,
     };
-    const CallStackType = std.BoundedArray(Frame, 1024);
+    const CallStackType = std.BoundedArray(CallStackEntry, 1024);
+
+    const LabelKind = enum {
+        block,
+        loop,
+    };
+    const LabelStackEntry = struct {
+        kind: LabelKind,
+
+        start: InstructionIndex,
+        end: InstructionIndex,
+
+        function_type: FunctionTypeTndex,
+    };
+    const LabelStackType = std.BoundedArray(LabelStackEntry, 1024);
 
     const Self = @This();
 
     call_stack: CallStackType,
     value_stack: ValueStackType,
+    label_stack: LabelStackType,
 
-    pub fn peekCurrentFrame(self: *const Self) !*const Frame {
+    instruction_pointer: u32,
+
+    pub fn init() Self {
+        return .{
+            .instruction_pointer = 0,
+            .call_stack = CallStackType{},
+            .value_stack = ValueStackType{},
+            .label_stack = LabelStackType{},
+        };
+    }
+
+    pub fn peekCurrentCall(self: *const Self) !CallStackEntry {
         if (self.call_stack.len == 0) {
-            return error.CallStackEmpty;
+            return error.EmptyCallStack;
         }
-
-        return &self.call_stack.get(self.call_stack.len - 1);
+        return self.call_stack.get(self.call_stack.len - 1);
     }
 
     pub fn popValuesIntoSlice(self: *Self, results: []Value) !void {
@@ -124,40 +146,121 @@ pub const Runtime = struct {
             },
         }
     }
-
-    pub fn init() Self {
-        return .{
-            .call_stack = CallStackType{},
-            .value_stack = ValueStackType{},
-        };
-    }
 };
 
-fn executeInstruction(runtime: *Runtime, instruction: Instruction) !void {
-    switch (instruction) {
-        inline else => |parameters, tag| {
-            // std.log.debug("execute {}", .{tag});
+fn executeExpression(module: *const Module, runtime: *Runtime, expression: *const Expression) !void {
+    runtime.instruction_pointer = 0;
 
-            const tag_name = comptime @tagName(tag);
-            const func = comptime @field(InstructionFunctions, tag_name);
+    while (true) {
+        const instruction = expression.instructions[runtime.instruction_pointer];
 
-            const ArgTuple: type = comptime std.meta.ArgsTuple(@TypeOf(func));
-            var args: ArgTuple = undefined;
+        switch (instruction.tag) {
+            .block => |tag| {
+                const arguments_index = instruction.arguments_index orelse {
+                    std.log.err("execute {}", .{tag});
 
-            args.@"0" = runtime;
+                    return error.NoArgumentsIndex;
+                };
+                const arguments = expression.instruction_arguments[arguments_index].block;
 
-            inline for (std.meta.fields(@TypeOf(parameters)), 1..) |p, i| {
-                @field(args, std.meta.fields(ArgTuple)[i].name) = @field(parameters, p.name);
-            }
+                try runtime.label_stack.append(.{
+                    .kind = .block,
+                    .start = arguments.start,
+                    .end = arguments.end,
+                    .function_type = arguments.function_type_index,
+                });
+            },
+            .loop => |tag| {
+                const arguments_index = instruction.arguments_index orelse {
+                    std.log.err("execute {}", .{tag});
 
-            _ = try @call(.auto, func, args);
-        },
+                    return error.NoArgumentsIndex;
+                };
+                const arguments = expression.instruction_arguments[arguments_index].loop;
+
+                try runtime.label_stack.append(.{
+                    .kind = .loop,
+                    .start = arguments.start,
+                    .end = arguments.end,
+                    .function_type = arguments.function_type_index,
+                });
+            },
+
+            .loop_end => {},
+            .block_end => {},
+            .if_end => {},
+
+            .expression_end => {
+                const entry = runtime.call_stack.popOrNull() orelse {
+                    return error.NoFrameToEnd;
+                };
+
+                const function_type = module.function_types[entry.function_type_index];
+                const expected_end = entry.results_start + function_type.results.len;
+
+                if (expected_end != runtime.value_stack.len) {
+                    std.log.err("expected_end={}, end={}", .{ expected_end, runtime.value_stack.len });
+                    return error.WrongValueStackSize;
+                }
+
+                for (function_type.results, entry.results_start..) |result_type, i| {
+                    const value: Value = runtime.value_stack.get(i);
+
+                    if (result_type != std.meta.activeTag(value)) {
+                        return error.WrongResultType;
+                    }
+                }
+
+                const value_stack_slice = runtime.value_stack.slice();
+
+                std.mem.copyForwards(
+                    Value,
+                    value_stack_slice[entry.locals_start..],
+                    value_stack_slice[entry.results_start..(entry.results_start + function_type.results.len)],
+                );
+
+                runtime.value_stack.len -= entry.locals_length;
+                return;
+            },
+            inline .br, .br_if, .@"local.get", .@"local.set", .@"local.tee", .@"global.get", .@"global.set", .@"i32.const", .@"i64.const", .@"f32.const", .@"f64.const" => |tag| {
+                const arguments_index = instruction.arguments_index orelse {
+                    std.log.err("execute {}", .{tag});
+
+                    return error.NoArgumentsIndex;
+                };
+
+                const tag_name = comptime @tagName(tag);
+                const func = comptime @field(InstructionFunctions, tag_name);
+
+                const ArgTuple: type = comptime std.meta.ArgsTuple(@TypeOf(func));
+                var args: ArgTuple = undefined;
+
+                args.@"0" = runtime;
+
+                const arguments = expression.instruction_arguments[arguments_index];
+
+                inline for (std.meta.fields(ArgumentsTypeOfInstruction(tag)), 1..) |p, i| {
+                    @field(args, std.meta.fields(ArgTuple)[i].name) = @field(@field(arguments, tag_name), p.name);
+                }
+
+                _ = try @call(.auto, func, args);
+            },
+            inline else => |tag| {
+                const tag_name = comptime @tagName(tag);
+                const func = comptime @field(InstructionFunctions, tag_name);
+
+                _ = try @call(.auto, func, .{runtime});
+            },
+        }
+
+        runtime.instruction_pointer += 1;
     }
 }
 
 pub fn invokeFunction(m: *const Module, runtime: *Runtime, func_idx: u32, parameters: []const Value, results: []Value) !void {
     const function_body = m.function_bodies[func_idx];
-    const function_type: FunctionType = m.function_types[m.function_type_indices[func_idx]];
+    const function_type_index = m.function_type_indices[func_idx];
+    const function_type: FunctionType = m.function_types[function_type_index];
 
     if (function_type.parameters.len != parameters.len) {
         return error.WrongNumberOfParameters;
@@ -167,7 +270,7 @@ pub fn invokeFunction(m: *const Module, runtime: *Runtime, func_idx: u32, parame
         return error.WrongNumberOfResults;
     }
 
-    const locals_length = std.math.cast(Runtime.ValueStackLength, function_body.locals.len) orelse {
+    const body_locals_length = std.math.cast(Runtime.ValueStackLength, function_body.locals.len) orelse {
         return error.TooManyLocals;
     };
 
@@ -175,12 +278,14 @@ pub fn invokeFunction(m: *const Module, runtime: *Runtime, func_idx: u32, parame
         return error.TooManyLocals;
     };
 
+    const locals_length = body_locals_length + parameters_length;
+    const results_start = runtime.value_stack.len + locals_length;
+
     try runtime.call_stack.append(.{
-        .kind = .call,
-        .results_start = runtime.value_stack.len + parameters_length + locals_length,
+        .results_start = results_start,
         .locals_start = runtime.value_stack.len,
-        .locals_length = parameters_length + locals_length,
-        .function_type = function_type,
+        .locals_length = locals_length,
+        .function_type_index = function_type_index,
     });
 
     for (function_type.parameters, 0..) |p, i| {
@@ -247,9 +352,11 @@ pub fn invokeFunction(m: *const Module, runtime: *Runtime, func_idx: u32, parame
         }
     }
 
-    for (function_body.expression) |instruction| {
-        try executeInstruction(runtime, instruction);
+    if (results_start != runtime.value_stack.len) {
+        return error.AssertValueStack;
     }
+
+    try executeExpression(m, runtime, &function_body.expression);
 
     try runtime.popValuesIntoSlice(results);
 

@@ -1,6 +1,7 @@
 const std = @import("std");
 
-const readInstructionTag = @import("./read_instruction_tag.zig").readInstructionTag;
+const instructionTagFromOpcode = @import("./instruction_tag_from_opcode.zig").instructionTagFromOpcode;
+const readOpcode = @import("./read_opcode.zig").readOpcode;
 const InstructionTag = @import("./instruction_tag.zig").InstructionTag;
 
 const Reader = std.fs.File.Reader;
@@ -13,6 +14,10 @@ const Export = @import("./module.zig").Export;
 const FunctionType = @import("./module.zig").FunctionType;
 const FunctionBody = @import("./module.zig").FunctionBody;
 const Module = @import("./module.zig").Module;
+const Expression = @import("./module.zig").Expression;
+const InstructionArguments = @import("./module.zig").InstructionArguments;
+const ArgumentsTypeOfInstruction = @import("./module.zig").ArgumentsTypeOfInstruction;
+const InstructionIndex = @import("./module.zig").InstructionIndex;
 
 const ValueTypeCode = enum(u8) {
     i32 = 0x7F,
@@ -96,6 +101,14 @@ const SectionId = enum(u8) {
     data_count_section = 12,
 };
 
+fn allocResultTypeFromValueType(allocator: std.mem.Allocator, vt: ValueType) ![]ValueType {
+    const result_type = try allocator.alloc(ValueType, 1);
+
+    result_type[0] = vt;
+
+    return result_type;
+}
+
 fn readResultType(allocator: std.mem.Allocator, reader: Reader) ![]ValueType {
     const count = try std.leb.readULEB128(u32, reader);
 
@@ -110,7 +123,14 @@ fn readResultType(allocator: std.mem.Allocator, reader: Reader) ![]ValueType {
 
 const BlockType = union(enum) {
     empty,
-    value_type: ValueTypeCode,
+    value_type: ValueType,
+
+    fn toFunctionTypeIndex(self: BlockType, section: *const FunctionTypeSection) u32 {
+        return switch (self) {
+            .value_type => |vt| section.empty_type_index + 1 + @intFromEnum(vt),
+            .empty => section.empty_type_index,
+        };
+    }
 };
 
 fn readBlockType(reader: ExpressionReader) !BlockType {
@@ -124,7 +144,7 @@ fn readBlockType(reader: ExpressionReader) !BlockType {
         return error.UnsupportedBlockType;
     };
 
-    return BlockType{ .value_type = e };
+    return BlockType{ .value_type = e.toValueType() };
 }
 
 const BranchTable = struct {
@@ -147,114 +167,183 @@ fn readBranchTable(allocator: std.mem.Allocator, reader: ExpressionReader) !Bran
     };
 }
 
-fn readExpression(allocator: std.mem.Allocator, reader: ExpressionReader) ![]Instruction {
-    var instructions = std.ArrayList(Instruction).init(allocator);
+const LabelKind = enum {
+    loop,
+    block,
+    @"if",
+};
 
-    var stack_height: usize = 1;
+const LabelStackEntry = struct {
+    kind: LabelKind,
+};
+
+fn readExpression(allocator: std.mem.Allocator, reader: ExpressionReader, function_type_section: *const FunctionTypeSection) !Expression {
+    var instructions = std.ArrayList(Instruction).init(allocator);
+    var instruction_arguments = std.ArrayList(InstructionArguments).init(allocator);
+    var label_stack = try std.BoundedArray(LabelStackEntry, 1024).init(0);
 
     while (true) {
-        const tag = try readInstructionTag(reader);
+        const opcode = try readOpcode(reader);
 
-        switch (tag) {
-            .end => {
-                if (stack_height == 0) {
-                    return error.NothingToPop;
-                }
-                stack_height -= 1;
-                try instructions.append(.{ .end = .{} });
+        const maybe_simple_tag = instructionTagFromOpcode(opcode);
 
-                if (stack_height == 0) {
-                    break;
-                }
-            },
-            .block => {
-                const bt = try readBlockType(reader);
+        if (maybe_simple_tag) |tag| {
+            try instructions.append(.{ .tag = tag });
+        } else {
+            switch (opcode) {
+                .end => {
+                    if (label_stack.len == 0) {
+                        try instructions.append(.{ .tag = .expression_end });
+                        break;
+                    }
+                    const entry = label_stack.pop();
 
-                switch (bt) {
-                    .value_type => |vt| {
-                        stack_height += 1;
+                    switch (entry.kind) {
+                        .block => {
+                            try instructions.append(.{ .tag = .block_end });
+                        },
+                        .loop => {
+                            try instructions.append(.{ .tag = .loop_end });
+                        },
+                        .@"if" => {
+                            try instructions.append(.{ .tag = .if_end });
+                        },
+                    }
+                },
+                .block => {
+                    const bt = try readBlockType(reader);
 
-                        std.log.debug("block bt={}", .{vt});
-                    },
-                    .empty => {
-                        stack_height += 1;
-                        std.log.debug("block bt=<empty>", .{});
-                    },
-                }
+                    const arguments_index: u32 = std.math.cast(u32, instruction_arguments.items.len) orelse {
+                        return error.TooManyInstructionArguments;
+                    };
 
-                try instructions.append(.{
-                    .block = .{},
-                });
-            },
-            .loop => {
-                const bt = try readBlockType(reader);
+                    const instruction_index: InstructionIndex = std.math.cast(InstructionIndex, instructions.items.len) orelse {
+                        return error.TooManyInstruction;
+                    };
 
-                switch (bt) {
-                    .value_type => |vt| {
-                        stack_height += 1;
+                    try instruction_arguments.append(.{
+                        .block = .{
+                            .start = instruction_index,
+                            .end = instruction_index,
+                            .function_type_index = bt.toFunctionTypeIndex(function_type_section),
+                        },
+                    });
 
-                        std.log.debug("loop bt={}", .{vt});
-                    },
-                    .empty => {
-                        stack_height += 1;
-                        std.log.debug("loop bt=<empty>", .{});
-                    },
-                }
+                    try instructions.append(.{
+                        .tag = .block,
+                        .arguments_index = arguments_index,
+                    });
 
-                try instructions.append(.{
-                    .loop = .{},
-                });
-            },
+                    try label_stack.append(.{
+                        .kind = .block,
+                    });
+                },
+                .loop => {
+                    const bt = try readBlockType(reader);
 
-            .@"if" => {
-                const bt = try readBlockType(reader);
+                    const arguments_index: u32 = std.math.cast(u32, instruction_arguments.items.len) orelse {
+                        return error.TooManyInstructionArguments;
+                    };
+                    const instruction_index: InstructionIndex = std.math.cast(InstructionIndex, instructions.items.len) orelse {
+                        return error.TooManyInstruction;
+                    };
 
-                switch (bt) {
-                    .value_type => |vt| {
-                        stack_height += 1;
+                    try instruction_arguments.append(.{
+                        .loop = .{
+                            .start = instruction_index,
+                            .end = instruction_index,
+                            .function_type_index = bt.toFunctionTypeIndex(function_type_section),
+                        },
+                    });
 
-                        std.log.debug("if bt={}", .{vt});
-                    },
-                    .empty => {
-                        stack_height += 1;
-                        std.log.debug("if bt=<empty>", .{});
-                    },
-                }
+                    try instructions.append(.{
+                        .tag = .loop,
+                        .arguments_index = arguments_index,
+                    });
 
-                try instructions.append(.{
-                    .@"if" = .{},
-                });
-            },
+                    try label_stack.append(.{
+                        .kind = .loop,
+                    });
+                },
 
-            .@"else" => {
-                try instructions.append(.{
-                    .@"else" = .{},
-                });
-            },
+                .@"if" => {
+                    const bt = try readBlockType(reader);
 
-            .br_table => {
-                _ = try readBranchTable(allocator, reader);
+                    switch (bt) {
+                        .value_type => |vt| {
+                            std.log.debug("if bt={}", .{vt});
+                        },
+                        .empty => {
+                            std.log.debug("if bt=<empty>", .{});
+                        },
+                    }
 
-                try instructions.append(.{
-                    .br_table = .{},
-                });
-            },
-            else => {
-                const instruction = try readInstructionParameters(reader, tag);
+                    try label_stack.append(.{
+                        .kind = .@"if",
+                    });
 
-                try instructions.append(instruction);
-            },
+                    try instructions.append(.{ .tag = .@"if" });
+                },
+
+                .@"else" => {
+                    try instructions.append(.{ .tag = .@"else" });
+                },
+
+                .br_table => {
+                    _ = try readBranchTable(allocator, reader);
+
+                    try instructions.append(.{ .tag = .br_table });
+                },
+
+                // tuple
+                inline .br, .br_if, .@"local.get", .@"local.set", .@"local.tee", .@"global.get", .@"global.set", .@"i32.const", .@"i64.const", .@"f32.const", .@"f64.const" => |code| {
+                    const tag_name = comptime @tagName(code);
+                    @setEvalBranchQuota(10_000);
+                    const tag = comptime std.meta.stringToEnum(InstructionTag, tag_name) orelse {
+                        @compileError("Missing InstructionTag: " ++ tag_name);
+                    };
+                    @setEvalBranchQuota(1000);
+                    const arguments_index: u32 = std.math.cast(u32, instruction_arguments.items.len) orelse {
+                        return error.TooManyInstructionArguments;
+                    };
+
+                    const TupleType: type = comptime ArgumentsTypeOfInstruction(tag);
+                    const tuple: TupleType = try readTuple(TupleType, reader);
+
+                    const arguments = @unionInit(InstructionArguments, tag_name, tuple);
+
+                    try instruction_arguments.append(arguments);
+                    try instructions.append(.{
+                        .tag = tag,
+                        .arguments_index = arguments_index,
+                    });
+                },
+
+                else => {
+                    std.log.err("UnhandledOpcode: opcode={}", .{opcode});
+                    return error.UnhandledOpcode;
+                },
+            }
         }
     }
 
-    if (stack_height != 0) {
+    if (label_stack.len != 0) {
         return error.UnfinishedBusiness;
     }
 
-    return try instructions.toOwnedSlice();
+    return Expression{
+        .instructions = try instructions.toOwnedSlice(),
+        .instruction_arguments = try instruction_arguments.toOwnedSlice(),
+    };
 }
 
-fn readInstructionTuple(comptime T: type, reader: anytype) !T {
+fn readTuple(comptime T: type, reader: anytype) !T {
+    const t_info = @typeInfo(T);
+
+    if (!t_info.Struct.is_tuple) {
+        @compileError("Should be a tuple");
+    }
+
     var params: T = undefined;
 
     inline for (std.meta.fields(T)) |p| {
@@ -288,33 +377,6 @@ fn readInstructionTuple(comptime T: type, reader: anytype) !T {
     }
 
     return params;
-}
-
-fn readInstructionParameters(reader: anytype, tag: InstructionTag) !Instruction {
-    const enum_info = @typeInfo(InstructionTag).Enum;
-
-    inline for (enum_info.fields, 0..) |field, field_index| {
-        if (@intFromEnum(tag) == field.value) {
-            const field_info: std.builtin.Type.UnionField = std.meta.fields(Instruction)[field_index];
-            const tuple_type = field_info.type;
-            const tuple_type_info = @typeInfo(tuple_type);
-
-            if (tuple_type_info.Struct.is_tuple) {
-                const params = try readInstructionTuple(tuple_type, reader);
-
-                return @unionInit(
-                    Instruction,
-                    field.name,
-                    params,
-                );
-            } else {
-                @compileError("Unsupported instruction parameters type: tuple");
-            }
-        }
-    }
-
-    std.log.err("InvalidInstructionParameters: {}", .{tag});
-    return error.InvalidInstructionParameters;
 }
 
 fn readLocals(allocator: std.mem.Allocator, reader: Reader) ![]Local {
@@ -376,28 +438,50 @@ fn readFunctionSection(allocator: std.mem.Allocator, reader: Reader) ![]u32 {
     return function_type_indices;
 }
 
-fn readFunctionTypeSection(allocator: std.mem.Allocator, reader: Reader) ![]FunctionType {
+const FunctionTypeSection = struct {
+    empty_type_index: u32,
+    function_types: []FunctionType,
+};
+
+fn readFunctionTypeSection(allocator: std.mem.Allocator, reader: Reader) !FunctionTypeSection {
     const count = try std.leb.readULEB128(u32, reader);
 
-    const function_types = try allocator.alloc(FunctionType, count);
+    const total_type_count = count + 1 + std.meta.fields(ValueType).len;
 
-    for (function_types) |*function_type| {
+    const function_types = try allocator.alloc(FunctionType, total_type_count);
+
+    for (0..count) |i| {
         const head = try reader.readByte();
 
         if (head != 0x60) {
             return error.InvalidTypeSectionHead;
         }
 
-        function_type.* = .{
+        function_types[i] = .{
             .parameters = try readResultType(allocator, reader),
             .results = try readResultType(allocator, reader),
         };
     }
 
-    return function_types;
+    function_types[count] = FunctionType{
+        .parameters = &.{},
+        .results = &.{},
+    };
+
+    inline for (std.meta.fields(ValueType), 0..) |f, i| {
+        function_types[count + 1 + i] = FunctionType{
+            .parameters = &.{},
+            .results = try allocResultTypeFromValueType(allocator, @enumFromInt(f.value)),
+        };
+    }
+
+    return FunctionTypeSection{
+        .empty_type_index = count,
+        .function_types = function_types,
+    };
 }
 
-fn readCodeSection(allocator: std.mem.Allocator, reader: Reader) ![]FunctionBody {
+fn readCodeSection(allocator: std.mem.Allocator, reader: Reader, function_type_section: *const FunctionTypeSection) ![]FunctionBody {
     const count = try std.leb.readULEB128(u32, reader);
 
     const codes = try allocator.alloc(FunctionBody, count);
@@ -408,19 +492,29 @@ fn readCodeSection(allocator: std.mem.Allocator, reader: Reader) ![]FunctionBody
         const position_before_locals = try reader.context.getPos();
 
         const locals = try readLocals(allocator, reader);
-
         const locals_size = try reader.context.getPos() - position_before_locals;
 
         const expression_size = code_size - locals_size;
-
         var expression_reader = std.io.limitedReader(reader, expression_size);
 
         code.* = .{
             .locals = locals,
-            .expression = try readExpression(allocator, expression_reader.reader()),
+            .expression = try readExpression(allocator, expression_reader.reader(), function_type_section),
         };
 
         if (expression_reader.bytes_left != 0) {
+            std.log.err("ExpressionReaderHasBytesLeft: bytes_left={}", .{expression_reader.bytes_left});
+
+            var buf: [32]u8 = undefined;
+
+            if (expression_reader.bytes_left < buf.len) {
+                const r = try reader.read(buf[0..expression_reader.bytes_left]);
+
+                for (buf[0..r]) |b| {
+                    std.log.err("  0x{X:0>2}", .{b});
+                }
+            }
+
             return error.ExpressionReaderHasBytesLeft;
         }
     }
@@ -447,7 +541,7 @@ pub fn readAllAlloc(allocator: std.mem.Allocator, reader: Reader) !Module {
     const area_allocator = area.allocator();
 
     var exports: []Export = &.{};
-    var function_types: []FunctionType = &.{};
+    var maybe_function_type_section: ?FunctionTypeSection = null;
     var function_type_indices: []u32 = &.{};
     var function_bodies: []FunctionBody = &.{};
 
@@ -469,7 +563,7 @@ pub fn readAllAlloc(allocator: std.mem.Allocator, reader: Reader) !Module {
 
         switch (secton_id) {
             .type_section => {
-                function_types = try readFunctionTypeSection(area_allocator, reader);
+                maybe_function_type_section = try readFunctionTypeSection(area_allocator, reader);
             },
             .function_section => {
                 function_type_indices = try readFunctionSection(area_allocator, reader);
@@ -478,7 +572,10 @@ pub fn readAllAlloc(allocator: std.mem.Allocator, reader: Reader) !Module {
                 exports = try readExportSection(area_allocator, reader);
             },
             .code_section => {
-                function_bodies = try readCodeSection(area_allocator, reader);
+                const function_type_section = maybe_function_type_section orelse {
+                    return error.NoTypeSection;
+                };
+                function_bodies = try readCodeSection(area_allocator, reader, &function_type_section);
             },
             else => {
                 std.log.info("Section {}: skiped", .{secton_id});
@@ -487,10 +584,15 @@ pub fn readAllAlloc(allocator: std.mem.Allocator, reader: Reader) !Module {
         }
     }
 
+    const function_type_section = maybe_function_type_section orelse {
+        return error.NoTypeSection;
+    };
+
     return .{
         .area = area,
         .exports = exports,
-        .function_types = function_types,
+        .empty_type_index = function_type_section.empty_type_index,
+        .function_types = function_type_section.function_types,
         .function_type_indices = function_type_indices,
         .function_bodies = function_bodies,
     };
