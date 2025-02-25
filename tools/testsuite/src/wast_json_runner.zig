@@ -203,9 +203,13 @@ fn assertReturn(allocator: std.mem.Allocator, mod: *const module.Module, command
     runtime.invokeFunction(mod, &rt, fn_index, parameters, results) catch |err| {
         std.log.err("assert_return: {s}: {d}: error: {}", .{ action.field, command.line, err });
 
+        std.log.err("+ parameters", .{});
         for (parameters, 0..) |p, i| {
             std.log.err("{d}: {}", .{ i, p });
         }
+
+        runtime.logRuntime(&rt);
+
         return err;
     };
 
@@ -233,7 +237,6 @@ fn assertReturn(allocator: std.mem.Allocator, mod: *const module.Module, command
             for (parameters, 0..) |p, i| {
                 std.log.err("{d}: {}", .{ i, p });
             }
-
             return error.Fail;
         }
     }

@@ -9,15 +9,7 @@ pub fn @"local.get"(runtime: *Runtime, localidx: u32) !void {
     const frame = try runtime.peekCurrentCall();
 
     if (localidx >= frame.locals_length) {
-        std.log.err("frame", .{});
-        std.log.err("{}", .{frame});
-        std.log.err("value_stack:", .{});
-        for (runtime.value_stack.slice()) |v| {
-            std.log.err("  {}", .{v});
-        }
-
-        std.log.err("localidx={} frame.locals_length={}", .{ localidx, frame.locals_length });
-        return error.@"local.get: invalid local index";
+        return error.InvalidLocalIndex;
     }
 
     const value = runtime.value_stack.get(frame.locals_start + localidx);
@@ -26,10 +18,17 @@ pub fn @"local.get"(runtime: *Runtime, localidx: u32) !void {
 }
 
 pub fn @"local.set"(runtime: *Runtime, localidx: u32) !void {
-    _ = runtime;
-    _ = localidx;
+    if (runtime.call_stack.len == 0) {
+        return error.EmptyCallStack;
+    }
 
-    return error.NotImplementedYet;
+    const frame = &runtime.call_stack.slice()[runtime.call_stack.len - 1];
+
+    if (localidx >= frame.locals_length) {
+        return error.InvalidLocalIndex;
+    }
+
+    runtime.value_stack.slice()[frame.locals_start + localidx] = try runtime.popAnyValue();
 }
 
 pub fn @"local.tee"(runtime: *Runtime, localidx: u32) !void {
@@ -729,37 +728,6 @@ pub fn nop(runtime: *Runtime) !void {
     return error.NotImplementedYet;
 }
 
-pub fn loop(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
-}
-pub fn @"if"(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
-}
-pub fn @"else"(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
-}
-
-pub fn br(runtime: *Runtime, idx: u32) !void {
-    _ = runtime;
-    _ = idx;
-    return error.NotImplementedYet;
-}
-pub fn br_if(runtime: *Runtime, idx: u32) !void {
-    _ = runtime;
-    _ = idx;
-    return error.NotImplementedYet;
-}
-pub fn br_table(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
-}
-pub fn @"return"(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
-}
 pub fn call(runtime: *Runtime) !void {
     _ = runtime;
     return error.NotImplementedYet;
@@ -768,10 +736,7 @@ pub fn call_indirect(runtime: *Runtime) !void {
     _ = runtime;
     return error.NotImplementedYet;
 }
-pub fn drop(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
-}
+
 pub fn select(runtime: *Runtime) !void {
     _ = runtime;
     return error.NotImplementedYet;

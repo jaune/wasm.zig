@@ -20,13 +20,15 @@ pub const FunctionType = struct {
     results: []ValueType,
 };
 
+pub const FunctionTypeIndex = u32;
+
 pub const Module = struct {
     area: std.heap.ArenaAllocator,
 
     exports: []Export,
     empty_type_index: u32,
     function_types: []FunctionType,
-    function_type_indices: []u32,
+    function_type_indices: []FunctionTypeIndex,
     function_bodies: []FunctionBody,
 
     const Self = @This();
@@ -69,32 +71,67 @@ pub const ValueType = enum {
     extern_reference,
 };
 
+pub const Value = union(ValueType) {
+    i32: i32,
+    i64: i64,
+    f32: f32,
+    f64: f64,
+
+    v128: void,
+    function_reference: void,
+    extern_reference: void,
+
+    pub fn eql(a: Value, b: Value) bool {
+        if (std.meta.activeTag(a) != std.meta.activeTag(b)) {
+            return false;
+        }
+
+        return switch (a) {
+            .i32 => a.i32 == b.i32,
+            .i64 => a.i64 == b.i64,
+            .f32 => a.f32 == b.f32,
+            .f64 => a.f64 == b.f64,
+            else => false,
+        };
+    }
+};
+
 pub const FunctionTypeTndex = u32;
 pub const InstructionIndex = u32;
 
-const LabelArguments = struct {
+pub const LabelIndex = u16;
+
+pub const LabelPayload = struct {
     start: InstructionIndex,
     end: InstructionIndex,
     function_type_index: FunctionTypeTndex,
 };
 
+pub const IfPayload = struct {
+    true: InstructionIndex,
+    false: InstructionIndex,
+};
+
+pub const BranchPayload = struct {
+    label_index: LabelIndex,
+};
+
+pub const ConstantPayload = struct {
+    value: Value,
+};
+
+pub const BranchTablePayload = struct {
+    branches: []LabelIndex,
+    fallback: LabelIndex,
+};
+
 pub const InstructionArguments = union {
-    br: Tuple(&[_]type{u32}),
-    br_if: Tuple(&[_]type{u32}),
-
-    block: LabelArguments,
-    loop: LabelArguments,
-
     @"local.get": Tuple(&[_]type{u32}),
     @"local.set": Tuple(&[_]type{u32}),
     @"local.tee": Tuple(&[_]type{u32}),
+
     @"global.get": Tuple(&[_]type{u32}),
     @"global.set": Tuple(&[_]type{u32}),
-
-    @"i32.const": Tuple(&[_]type{i32}),
-    @"i64.const": Tuple(&[_]type{i64}),
-    @"f32.const": Tuple(&[_]type{f32}),
-    @"f64.const": Tuple(&[_]type{f64}),
 };
 
 pub fn ArgumentsTypeOfInstruction(comptime tag: InstructionTag) type {
@@ -107,9 +144,17 @@ pub fn ArgumentsTypeOfInstruction(comptime tag: InstructionTag) type {
 pub const Expression = struct {
     instructions: []Instruction,
     instruction_arguments: []InstructionArguments,
+
+    branch_payloads: []BranchPayload,
+    label_payloads: []LabelPayload,
+    constant_payloads: []ConstantPayload,
+    branch_table_payloads: []BranchTablePayload,
+    if_payloads: []IfPayload,
 };
+
+pub const InstructionPayloadIndex = u16;
 
 pub const Instruction = struct {
     tag: InstructionTag,
-    arguments_index: ?u32 = null,
+    payload_index: ?InstructionPayloadIndex = null,
 };

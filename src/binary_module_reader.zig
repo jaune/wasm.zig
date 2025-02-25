@@ -7,6 +7,7 @@ const InstructionTag = @import("./instruction_tag.zig").InstructionTag;
 const Reader = std.fs.File.Reader;
 const ExpressionReader = std.io.LimitedReader(Reader).Reader;
 
+const Value = @import("./module.zig").Value;
 const ValueType = @import("./module.zig").ValueType;
 const Instruction = @import("./module.zig").Instruction;
 const Local = @import("./module.zig").Local;
@@ -18,6 +19,14 @@ const Expression = @import("./module.zig").Expression;
 const InstructionArguments = @import("./module.zig").InstructionArguments;
 const ArgumentsTypeOfInstruction = @import("./module.zig").ArgumentsTypeOfInstruction;
 const InstructionIndex = @import("./module.zig").InstructionIndex;
+const InstructionPayloadIndex = @import("./module.zig").InstructionPayloadIndex;
+const LabelIndex = @import("./module.zig").LabelIndex;
+const BranchPayload = @import("./module.zig").BranchPayload;
+const LabelPayload = @import("./module.zig").LabelPayload;
+const ConstantPayload = @import("./module.zig").ConstantPayload;
+const FunctionTypeIndex = @import("./module.zig").FunctionTypeIndex;
+const BranchTablePayload = @import("./module.zig").BranchTablePayload;
+const IfPayload = @import("./module.zig").IfPayload;
 
 const ValueTypeCode = enum(u8) {
     i32 = 0x7F,
@@ -147,23 +156,28 @@ fn readBlockType(reader: ExpressionReader) !BlockType {
     return BlockType{ .value_type = e.toValueType() };
 }
 
-const BranchTable = struct {
-    branches: []u32,
-    fallback: u32,
-};
-
-fn readBranchTable(allocator: std.mem.Allocator, reader: ExpressionReader) !BranchTable {
+fn readBranchTablePaylaod(allocator: std.mem.Allocator, reader: ExpressionReader) !BranchTablePayload {
     const count = try std.leb.readULEB128(u32, reader);
 
-    const branches = try allocator.alloc(u32, count);
+    const branches = try allocator.alloc(LabelIndex, count);
 
     for (branches) |*branch| {
-        branch.* = try std.leb.readULEB128(u32, reader);
+        branch.* = try std.leb.readULEB128(LabelIndex, reader);
     }
 
-    return BranchTable{
+    return BranchTablePayload{
         .branches = branches,
-        .fallback = try std.leb.readULEB128(u32, reader),
+        .fallback = try std.leb.readULEB128(LabelIndex, reader),
+    };
+}
+
+fn readValue(comptime T: type, reader: ExpressionReader) !Value {
+    return switch (T) {
+        i32 => Value{ .i32 = try std.leb.readILEB128(i32, reader) },
+        i64 => Value{ .i64 = try std.leb.readILEB128(i64, reader) },
+        f32 => Value{ .f32 = try readFloat(f32, reader) },
+        f64 => Value{ .f64 = try readFloat(f64, reader) },
+        else => @compileError("Unhandle type " ++ @typeName(T)),
     };
 }
 
@@ -171,16 +185,23 @@ const LabelKind = enum {
     loop,
     block,
     @"if",
+    @"else",
 };
-
 const LabelStackEntry = struct {
     kind: LabelKind,
+    payload_index: InstructionPayloadIndex,
 };
 
 fn readExpression(allocator: std.mem.Allocator, reader: ExpressionReader, function_type_section: *const FunctionTypeSection) !Expression {
     var instructions = std.ArrayList(Instruction).init(allocator);
     var instruction_arguments = std.ArrayList(InstructionArguments).init(allocator);
+
     var label_stack = try std.BoundedArray(LabelStackEntry, 1024).init(0);
+    var branch_payloads = try std.BoundedArray(BranchPayload, 1024).init(0);
+    var label_payloads = try std.BoundedArray(LabelPayload, 1024).init(0);
+    var if_payloads = try std.BoundedArray(IfPayload, 1024).init(0);
+    var constant_payloads = try std.BoundedArray(ConstantPayload, 1024).init(0);
+    var branch_table_payloads = try std.BoundedArray(BranchTablePayload, 1024).init(0);
 
     while (true) {
         const opcode = try readOpcode(reader);
@@ -196,114 +217,222 @@ fn readExpression(allocator: std.mem.Allocator, reader: ExpressionReader, functi
                         try instructions.append(.{ .tag = .expression_end });
                         break;
                     }
+
+                    const instruction_index: InstructionIndex = std.math.cast(InstructionIndex, instructions.items.len) orelse {
+                        return error.TooManyInstruction;
+                    };
+
                     const entry = label_stack.pop();
 
+                    const payload = &label_payloads.slice()[entry.payload_index];
+
                     switch (entry.kind) {
-                        .block => {
-                            try instructions.append(.{ .tag = .block_end });
-                        },
                         .loop => {
                             try instructions.append(.{ .tag = .loop_end });
+
+                            payload.end = instruction_index;
+                        },
+                        .block => {
+                            try instructions.append(.{ .tag = .block_end });
+
+                            payload.end = instruction_index;
                         },
                         .@"if" => {
-                            try instructions.append(.{ .tag = .if_end });
+                            try instructions.append(.{ .tag = .block_end });
+
+                            payload.end = instruction_index;
+
+                            const if_instruction = instructions.items[payload.start - 1];
+                            const if_instruction_payload = &if_payloads.slice()[if_instruction.payload_index.?];
+
+                            if_instruction_payload.false = instruction_index;
+                        },
+                        .@"else" => {
+                            try instructions.append(.{ .tag = .block_end });
+
+                            payload.end = instruction_index;
+
+                            const if_label = label_stack.pop();
+
+                            if (if_label.kind != .@"if") {
+                                return error.PreviousLabelShouldBeIf;
+                            }
+                            const if_label_payload = &label_payloads.slice()[if_label.payload_index];
+
+                            if_label_payload.end = instruction_index;
+
+                            const if_instruction = instructions.items[if_label_payload.start - 1];
+                            const if_instruction_payload = &if_payloads.slice()[if_instruction.payload_index.?];
+
+                            if_instruction_payload.false = payload.start;
                         },
                     }
                 },
-                .block => {
-                    const bt = try readBlockType(reader);
 
-                    const arguments_index: u32 = std.math.cast(u32, instruction_arguments.items.len) orelse {
-                        return error.TooManyInstructionArguments;
-                    };
+                .@"else" => {
+                    try instructions.append(.{
+                        .tag = .block_end,
+                    });
 
                     const instruction_index: InstructionIndex = std.math.cast(InstructionIndex, instructions.items.len) orelse {
                         return error.TooManyInstruction;
                     };
 
-                    try instruction_arguments.append(.{
-                        .block = .{
-                            .start = instruction_index,
-                            .end = instruction_index,
-                            .function_type_index = bt.toFunctionTypeIndex(function_type_section),
-                        },
-                    });
+                    const if_label = label_stack.get(label_stack.len - 1);
+                    const if_label_payload = label_payloads.slice()[if_label.payload_index];
 
+                    if (if_label.kind != .@"if") {
+                        return error.PreviousLabelShouldBeIf;
+                    }
+
+                    const if_instruction = instructions.items[if_label_payload.start - 1];
+                    const if_instruction_payload = &if_payloads.slice()[if_instruction.payload_index.?];
+
+                    if_instruction_payload.false = instruction_index;
+
+                    const payload_index = label_payloads.len;
                     try instructions.append(.{
                         .tag = .block,
-                        .arguments_index = arguments_index,
+                        .payload_index = payload_index,
                     });
-
+                    try label_payloads.append(.{
+                        .start = instruction_index,
+                        .end = instruction_index,
+                        .function_type_index = if_label_payload.function_type_index,
+                    });
                     try label_stack.append(.{
-                        .kind = .block,
-                    });
-                },
-                .loop => {
-                    const bt = try readBlockType(reader);
-
-                    const arguments_index: u32 = std.math.cast(u32, instruction_arguments.items.len) orelse {
-                        return error.TooManyInstructionArguments;
-                    };
-                    const instruction_index: InstructionIndex = std.math.cast(InstructionIndex, instructions.items.len) orelse {
-                        return error.TooManyInstruction;
-                    };
-
-                    try instruction_arguments.append(.{
-                        .loop = .{
-                            .start = instruction_index,
-                            .end = instruction_index,
-                            .function_type_index = bt.toFunctionTypeIndex(function_type_section),
-                        },
-                    });
-
-                    try instructions.append(.{
-                        .tag = .loop,
-                        .arguments_index = arguments_index,
-                    });
-
-                    try label_stack.append(.{
-                        .kind = .loop,
+                        .kind = .@"else",
+                        .payload_index = payload_index,
                     });
                 },
 
                 .@"if" => {
                     const bt = try readBlockType(reader);
 
-                    switch (bt) {
-                        .value_type => |vt| {
-                            std.log.debug("if bt={}", .{vt});
-                        },
-                        .empty => {
-                            std.log.debug("if bt=<empty>", .{});
-                        },
-                    }
+                    const instruction_index: InstructionIndex = std.math.cast(InstructionIndex, instructions.items.len) orelse {
+                        return error.TooManyInstruction;
+                    };
 
-                    try label_stack.append(.{
-                        .kind = .@"if",
+                    try instructions.append(.{
+                        .tag = .@"if",
+                        .payload_index = if_payloads.len,
+                    });
+                    try if_payloads.append(.{
+                        .true = instruction_index + 1,
+                        .false = 0,
                     });
 
-                    try instructions.append(.{ .tag = .@"if" });
+                    const payload_index = label_payloads.len;
+                    try instructions.append(.{
+                        .tag = .block,
+                        .payload_index = payload_index,
+                    });
+                    try label_payloads.append(.{
+                        .start = instruction_index,
+                        .end = instruction_index,
+                        .function_type_index = bt.toFunctionTypeIndex(function_type_section),
+                    });
+                    try label_stack.append(.{
+                        .kind = .@"if",
+                        .payload_index = payload_index,
+                    });
                 },
 
-                .@"else" => {
-                    try instructions.append(.{ .tag = .@"else" });
+                .block, .loop => |op| {
+                    const bt = try readBlockType(reader);
+
+                    const instruction_index: InstructionIndex = std.math.cast(InstructionIndex, instructions.items.len) orelse {
+                        return error.TooManyInstruction;
+                    };
+
+                    const payload_index = label_payloads.len;
+                    try instructions.append(.{
+                        .tag = switch (op) {
+                            .block => .block,
+                            .loop => .loop,
+                            .@"if" => .@"if",
+                            else => return error.Unreachable,
+                        },
+                        .payload_index = payload_index,
+                    });
+                    try label_payloads.append(.{
+                        .start = instruction_index,
+                        .end = instruction_index,
+                        .function_type_index = bt.toFunctionTypeIndex(function_type_section),
+                    });
+                    try label_stack.append(.{
+                        .kind = switch (op) {
+                            .block => .block,
+                            .loop => .loop,
+                            .@"if" => .@"if",
+                            else => {
+                                return error.Unreachable;
+                            },
+                        },
+                        .payload_index = payload_index,
+                    });
+                },
+
+                .@"i32.const", .@"i64.const", .@"f32.const", .@"f64.const" => |op| {
+                    const value = switch (op) {
+                        .@"i32.const" => try readValue(i32, reader),
+                        .@"i64.const" => try readValue(i64, reader),
+                        .@"f32.const" => try readValue(f32, reader),
+                        .@"f64.const" => try readValue(f64, reader),
+                        else => return error.Unreachable,
+                    };
+
+                    try instructions.append(.{
+                        .tag = .@"n.const",
+                        .payload_index = constant_payloads.len,
+                    });
+                    try constant_payloads.append(.{
+                        .value = value,
+                    });
+                },
+                .@"v128.const" => {
+                    return error.UnhandledOpcode;
                 },
 
                 .br_table => {
-                    _ = try readBranchTable(allocator, reader);
+                    try instructions.append(.{
+                        .tag = .branch_table,
+                        .payload_index = branch_table_payloads.len,
+                    });
+                    try branch_table_payloads.append(try readBranchTablePaylaod(allocator, reader));
+                },
 
-                    try instructions.append(.{ .tag = .br_table });
+                .br, .br_if => |op| {
+                    const label_index = try std.leb.readULEB128(LabelIndex, reader);
+
+                    if (label_index >= label_stack.len) {
+                        return error.InvalidLabelIndex;
+                    }
+
+                    try instructions.append(.{
+                        .tag = switch (op) {
+                            .br => .branch,
+                            .br_if => .branch_if,
+                            else => {
+                                return error.Unreachable;
+                            },
+                        },
+                        .payload_index = branch_payloads.len,
+                    });
+                    try branch_payloads.append(.{
+                        .label_index = label_index,
+                    });
                 },
 
                 // tuple
-                inline .br, .br_if, .@"local.get", .@"local.set", .@"local.tee", .@"global.get", .@"global.set", .@"i32.const", .@"i64.const", .@"f32.const", .@"f64.const" => |code| {
+                inline .@"local.get", .@"local.set", .@"local.tee", .@"global.get", .@"global.set" => |code| {
                     const tag_name = comptime @tagName(code);
                     @setEvalBranchQuota(10_000);
                     const tag = comptime std.meta.stringToEnum(InstructionTag, tag_name) orelse {
                         @compileError("Missing InstructionTag: " ++ tag_name);
                     };
                     @setEvalBranchQuota(1000);
-                    const arguments_index: u32 = std.math.cast(u32, instruction_arguments.items.len) orelse {
+                    const payload_index: InstructionPayloadIndex = std.math.cast(InstructionPayloadIndex, instruction_arguments.items.len) orelse {
                         return error.TooManyInstructionArguments;
                     };
 
@@ -315,7 +444,7 @@ fn readExpression(allocator: std.mem.Allocator, reader: ExpressionReader, functi
                     try instruction_arguments.append(arguments);
                     try instructions.append(.{
                         .tag = tag,
-                        .arguments_index = arguments_index,
+                        .payload_index = payload_index,
                     });
                 },
 
@@ -334,6 +463,42 @@ fn readExpression(allocator: std.mem.Allocator, reader: ExpressionReader, functi
     return Expression{
         .instructions = try instructions.toOwnedSlice(),
         .instruction_arguments = try instruction_arguments.toOwnedSlice(),
+        .branch_payloads = try allocAndCopySlice(allocator, BranchPayload, branch_payloads.slice()),
+        .label_payloads = try allocAndCopySlice(allocator, LabelPayload, label_payloads.slice()),
+        .constant_payloads = try allocAndCopySlice(allocator, ConstantPayload, constant_payloads.slice()),
+        .branch_table_payloads = try allocAndCopySlice(allocator, BranchTablePayload, branch_table_payloads.slice()),
+        .if_payloads = try allocAndCopySlice(allocator, IfPayload, if_payloads.slice()),
+    };
+}
+
+fn allocAndCopySlice(allocator: std.mem.Allocator, comptime T: type, source: []T) ![]T {
+    const result = try allocator.alloc(T, source.len);
+
+    std.mem.copyBackwards(T, result, source);
+
+    return result;
+}
+
+fn readFloat(comptime T: type, reader: anytype) !T {
+    const i = @typeInfo(T);
+
+    return switch (i) {
+        .Float => |t| {
+            switch (t.bits) {
+                32 => {
+                    return @as(f32, @bitCast(try reader.readInt(u32, .little)));
+                },
+                64 => {
+                    return @as(f64, @bitCast(try reader.readInt(u64, .little)));
+                },
+                else => {
+                    @compileError("Unsupported instruction parameters type: parameter type: " ++ @typeName(T));
+                },
+            }
+        },
+        else => {
+            @compileError("Unsupported instruction parameters type: parameter type: " ++ @typeName(T));
+        },
     };
 }
 
@@ -357,18 +522,8 @@ fn readTuple(comptime T: type, reader: anytype) !T {
                     @field(params, p.name) = try std.leb.readULEB128(p.type, reader);
                 }
             },
-            .Float => |t| {
-                switch (t.bits) {
-                    32 => {
-                        @field(params, p.name) = @as(f32, @bitCast(try reader.readInt(u32, .little)));
-                    },
-                    64 => {
-                        @field(params, p.name) = @as(f64, @bitCast(try reader.readInt(u64, .little)));
-                    },
-                    else => {
-                        @compileError("Unsupported instruction parameters type: parameter type: " ++ @typeName(p.type));
-                    },
-                }
+            .Float => {
+                @field(params, p.name) = try readFloat(p.type, reader);
             },
             else => {
                 @compileError("Unsupported instruction parameters type: parameter type: " ++ @typeName(p.type));

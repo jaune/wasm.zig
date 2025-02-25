@@ -11,12 +11,11 @@ pub const InstructionTag = enum {
     block_end,
 
     @"if",
-    @"else",
-    if_end,
 
-    br,
-    br_if,
-    br_table,
+    branch,
+    branch_if,
+    branch_table,
+
     @"return",
     call,
     call_indirect,
@@ -55,10 +54,9 @@ pub const InstructionTag = enum {
     @"i64.store32",
     @"memory.size",
     @"memory.grow",
-    @"i32.const",
-    @"i64.const",
-    @"f32.const",
-    @"f64.const",
+
+    @"n.const",
+
     @"i32.eqz",
     @"i32.eq",
     @"i32.ne",
