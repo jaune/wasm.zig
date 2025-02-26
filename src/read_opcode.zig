@@ -144,10 +144,26 @@ pub fn readOpcode(reader: anytype) !Opcode {
             return .@"i64.store32";
         },
         0x3F => {
-            return .@"memory.size";
+            const op1 = try reader.readByte();
+            switch (op1) {
+                0x00 => {
+                    return .@"memory.size";
+                },
+                else => {
+                    return error.InvalidOpcode;
+                },
+            }
         },
         0x40 => {
-            return .@"memory.grow";
+            const op1 = try reader.readByte();
+            switch (op1) {
+                0x00 => {
+                    return .@"memory.grow";
+                },
+                else => {
+                    return error.InvalidOpcode;
+                },
+            }
         },
         0x41 => {
             return .@"i32.const";

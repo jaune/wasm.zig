@@ -5,7 +5,7 @@ const readOpcode = @import("./read_opcode.zig").readOpcode;
 const InstructionTag = @import("./instruction_tag.zig").InstructionTag;
 
 const Reader = std.fs.File.Reader;
-const ExpressionReader = std.io.LimitedReader(Reader).Reader;
+const FileReader = Reader;
 
 const Value = @import("./module.zig").Value;
 const ValueType = @import("./module.zig").ValueType;
@@ -16,8 +16,6 @@ const FunctionType = @import("./module.zig").FunctionType;
 const FunctionBody = @import("./module.zig").FunctionBody;
 const Module = @import("./module.zig").Module;
 const Expression = @import("./module.zig").Expression;
-const InstructionArguments = @import("./module.zig").InstructionArguments;
-const ArgumentsTypeOfInstruction = @import("./module.zig").ArgumentsTypeOfInstruction;
 const InstructionIndex = @import("./module.zig").InstructionIndex;
 const InstructionPayloadIndex = @import("./module.zig").InstructionPayloadIndex;
 const LabelIndex = @import("./module.zig").LabelIndex;
@@ -27,6 +25,9 @@ const ConstantPayload = @import("./module.zig").ConstantPayload;
 const FunctionTypeIndex = @import("./module.zig").FunctionTypeIndex;
 const BranchTablePayload = @import("./module.zig").BranchTablePayload;
 const IfPayload = @import("./module.zig").IfPayload;
+const CallPayload = @import("./module.zig").CallPayload;
+const CallIndirectPayload = @import("./module.zig").CallIndirectPayload;
+const MemoryAccessorPayload = @import("./module.zig").MemoryAccessorPayload;
 
 const ValueTypeCode = enum(u8) {
     i32 = 0x7F,
@@ -58,18 +59,9 @@ const ExportDescritionTypeCode = enum(u8) {
     table = 0x01,
     memory = 0x02,
     global = 0x03,
-
-    fn toExportDescritionType(v: ExportDescritionTypeCode) Export.DescritionType {
-        return switch (v) {
-            .function => .function,
-            .table => .table,
-            .memory => .memory,
-            .global => .global,
-        };
-    }
 };
 
-fn enumFromInt(comptime E: type, raw: u8) !E {
+fn intToEnumOrNull(comptime E: type, raw: u8) ?E {
     const enum_info = @typeInfo(E).Enum;
 
     if (enum_info.tag_type != u8) {
@@ -82,8 +74,14 @@ fn enumFromInt(comptime E: type, raw: u8) !E {
         }
     }
 
-    std.log.err("InvalidEnumValue: {s} raw=0x{x}", .{ @typeName(E), raw });
-    return error.InvalidEnumValue;
+    return null;
+}
+
+fn enumFromInt(comptime E: type, raw: u8) !E {
+    return intToEnumOrNull(E, raw) orelse {
+        std.log.err("InvalidEnumValue: {s} raw=0x{x}", .{ @typeName(E), raw });
+        return error.InvalidEnumValue;
+    };
 }
 
 fn readEnum(comptime E: type, reader: anytype) !E {
@@ -118,13 +116,17 @@ fn allocResultTypeFromValueType(allocator: std.mem.Allocator, vt: ValueType) ![]
     return result_type;
 }
 
+fn readValueType(reader: Reader) !ValueType {
+    return (try readEnum(ValueTypeCode, reader)).toValueType();
+}
+
 fn readResultType(allocator: std.mem.Allocator, reader: Reader) ![]ValueType {
     const count = try std.leb.readULEB128(u32, reader);
 
     const result_type = try allocator.alloc(ValueType, count);
 
     for (result_type) |*value_type| {
-        value_type.* = (try readEnum(ValueTypeCode, reader)).toValueType();
+        value_type.* = try readValueType(reader);
     }
 
     return result_type;
@@ -133,30 +135,52 @@ fn readResultType(allocator: std.mem.Allocator, reader: Reader) ![]ValueType {
 const BlockType = union(enum) {
     empty,
     value_type: ValueType,
+    function_type_index: FunctionTypeIndex,
 
-    fn toFunctionTypeIndex(self: BlockType, section: *const FunctionTypeSection) u32 {
+    fn toFunctionTypeIndex(self: BlockType, section: *const FunctionTypeSection) FunctionTypeIndex {
         return switch (self) {
+            .function_type_index => self.function_type_index,
             .value_type => |vt| section.empty_type_index + 1 + @intFromEnum(vt),
             .empty => section.empty_type_index,
         };
     }
 };
 
-fn readBlockType(reader: ExpressionReader) !BlockType {
-    const b = try reader.readByte();
+fn readBlockType(reader: FileReader) !BlockType {
+    var file_reader_context: std.fs.File = reader.context;
+
+    const starting_position = try file_reader_context.getPos();
+
+    const file_reader = file_reader_context.reader();
+
+    const b = try file_reader.readByte();
 
     if (b == 0x40) {
         return .empty;
     }
 
-    const e = enumFromInt(ValueTypeCode, b) catch {
-        return error.UnsupportedBlockType;
+    const e = intToEnumOrNull(ValueTypeCode, b) orelse {
+        try file_reader_context.seekTo(starting_position);
+
+        const function_type_index = try std.leb.readILEB128(i32, file_reader);
+
+        if (function_type_index < 0) {
+            return error.InvalidFunctionTypeIndex;
+        }
+
+        const index: FunctionTypeIndex = std.math.cast(FunctionTypeIndex, function_type_index) orelse {
+            return error.InvalidFunctionTypeIndex;
+        };
+
+        return BlockType{
+            .function_type_index = index,
+        };
     };
 
     return BlockType{ .value_type = e.toValueType() };
 }
 
-fn readBranchTablePaylaod(allocator: std.mem.Allocator, reader: ExpressionReader) !BranchTablePayload {
+fn readBranchTablePaylaod(allocator: std.mem.Allocator, reader: FileReader) !BranchTablePayload {
     const count = try std.leb.readULEB128(u32, reader);
 
     const branches = try allocator.alloc(LabelIndex, count);
@@ -171,7 +195,7 @@ fn readBranchTablePaylaod(allocator: std.mem.Allocator, reader: ExpressionReader
     };
 }
 
-fn readValue(comptime T: type, reader: ExpressionReader) !Value {
+fn readValue(comptime T: type, reader: FileReader) !Value {
     return switch (T) {
         i32 => Value{ .i32 = try std.leb.readILEB128(i32, reader) },
         i64 => Value{ .i64 = try std.leb.readILEB128(i64, reader) },
@@ -181,196 +205,48 @@ fn readValue(comptime T: type, reader: ExpressionReader) !Value {
     };
 }
 
-const LabelKind = enum {
-    loop,
-    block,
-    @"if",
-    @"else",
-};
-const LabelStackEntry = struct {
-    kind: LabelKind,
-    payload_index: InstructionPayloadIndex,
-};
+const ExpressionBuilder = @import("./expression_builder.zig").ExpressionBuilder;
 
-fn readExpression(allocator: std.mem.Allocator, reader: ExpressionReader, function_type_section: *const FunctionTypeSection) !Expression {
-    var instructions = std.ArrayList(Instruction).init(allocator);
-    var instruction_arguments = std.ArrayList(InstructionArguments).init(allocator);
+fn readExpression(allocator: std.mem.Allocator, reader: FileReader, function_type_section: *const FunctionTypeSection) !Expression {
+    var builder: ExpressionBuilder = ExpressionBuilder.init(allocator);
+    defer builder.deinit();
 
-    var label_stack = try std.BoundedArray(LabelStackEntry, 1024).init(0);
-    var branch_payloads = try std.BoundedArray(BranchPayload, 1024).init(0);
-    var label_payloads = try std.BoundedArray(LabelPayload, 1024).init(0);
-    var if_payloads = try std.BoundedArray(IfPayload, 1024).init(0);
-    var constant_payloads = try std.BoundedArray(ConstantPayload, 1024).init(0);
-    var branch_table_payloads = try std.BoundedArray(BranchTablePayload, 1024).init(0);
-
-    while (true) {
+    while (!builder.is_expression_completed) {
         const opcode = try readOpcode(reader);
 
         const maybe_simple_tag = instructionTagFromOpcode(opcode);
 
         if (maybe_simple_tag) |tag| {
-            try instructions.append(.{ .tag = tag });
+            try builder.appendTag(tag);
         } else {
             switch (opcode) {
                 .end => {
-                    if (label_stack.len == 0) {
-                        try instructions.append(.{ .tag = .expression_end });
-                        break;
-                    }
-
-                    const instruction_index: InstructionIndex = std.math.cast(InstructionIndex, instructions.items.len) orelse {
-                        return error.TooManyInstruction;
-                    };
-
-                    const entry = label_stack.pop();
-
-                    const payload = &label_payloads.slice()[entry.payload_index];
-
-                    switch (entry.kind) {
-                        .loop => {
-                            try instructions.append(.{ .tag = .loop_end });
-
-                            payload.end = instruction_index;
-                        },
-                        .block => {
-                            try instructions.append(.{ .tag = .block_end });
-
-                            payload.end = instruction_index;
-                        },
-                        .@"if" => {
-                            try instructions.append(.{ .tag = .block_end });
-
-                            payload.end = instruction_index;
-
-                            const if_instruction = instructions.items[payload.start - 1];
-                            const if_instruction_payload = &if_payloads.slice()[if_instruction.payload_index.?];
-
-                            if_instruction_payload.false = instruction_index;
-                        },
-                        .@"else" => {
-                            try instructions.append(.{ .tag = .block_end });
-
-                            payload.end = instruction_index;
-
-                            const if_label = label_stack.pop();
-
-                            if (if_label.kind != .@"if") {
-                                return error.PreviousLabelShouldBeIf;
-                            }
-                            const if_label_payload = &label_payloads.slice()[if_label.payload_index];
-
-                            if_label_payload.end = instruction_index;
-
-                            const if_instruction = instructions.items[if_label_payload.start - 1];
-                            const if_instruction_payload = &if_payloads.slice()[if_instruction.payload_index.?];
-
-                            if_instruction_payload.false = payload.start;
-                        },
-                    }
+                    try builder.appendEnd();
                 },
 
                 .@"else" => {
-                    try instructions.append(.{
-                        .tag = .block_end,
-                    });
-
-                    const instruction_index: InstructionIndex = std.math.cast(InstructionIndex, instructions.items.len) orelse {
-                        return error.TooManyInstruction;
-                    };
-
-                    const if_label = label_stack.get(label_stack.len - 1);
-                    const if_label_payload = label_payloads.slice()[if_label.payload_index];
-
-                    if (if_label.kind != .@"if") {
-                        return error.PreviousLabelShouldBeIf;
-                    }
-
-                    const if_instruction = instructions.items[if_label_payload.start - 1];
-                    const if_instruction_payload = &if_payloads.slice()[if_instruction.payload_index.?];
-
-                    if_instruction_payload.false = instruction_index;
-
-                    const payload_index = label_payloads.len;
-                    try instructions.append(.{
-                        .tag = .block,
-                        .payload_index = payload_index,
-                    });
-                    try label_payloads.append(.{
-                        .start = instruction_index,
-                        .end = instruction_index,
-                        .function_type_index = if_label_payload.function_type_index,
-                    });
-                    try label_stack.append(.{
-                        .kind = .@"else",
-                        .payload_index = payload_index,
-                    });
+                    try builder.appendElse();
                 },
 
                 .@"if" => {
                     const bt = try readBlockType(reader);
 
-                    const instruction_index: InstructionIndex = std.math.cast(InstructionIndex, instructions.items.len) orelse {
-                        return error.TooManyInstruction;
-                    };
-
-                    try instructions.append(.{
-                        .tag = .@"if",
-                        .payload_index = if_payloads.len,
-                    });
-                    try if_payloads.append(.{
-                        .true = instruction_index + 1,
-                        .false = 0,
-                    });
-
-                    const payload_index = label_payloads.len;
-                    try instructions.append(.{
-                        .tag = .block,
-                        .payload_index = payload_index,
-                    });
-                    try label_payloads.append(.{
-                        .start = instruction_index,
-                        .end = instruction_index,
-                        .function_type_index = bt.toFunctionTypeIndex(function_type_section),
-                    });
-                    try label_stack.append(.{
-                        .kind = .@"if",
-                        .payload_index = payload_index,
-                    });
+                    try builder.appendIf(bt.toFunctionTypeIndex(function_type_section));
                 },
 
                 .block, .loop => |op| {
                     const bt = try readBlockType(reader);
 
-                    const instruction_index: InstructionIndex = std.math.cast(InstructionIndex, instructions.items.len) orelse {
-                        return error.TooManyInstruction;
-                    };
-
-                    const payload_index = label_payloads.len;
-                    try instructions.append(.{
-                        .tag = switch (op) {
+                    try builder.appendBlock(
+                        switch (op) {
                             .block => .block,
                             .loop => .loop,
-                            .@"if" => .@"if",
-                            else => return error.Unreachable,
-                        },
-                        .payload_index = payload_index,
-                    });
-                    try label_payloads.append(.{
-                        .start = instruction_index,
-                        .end = instruction_index,
-                        .function_type_index = bt.toFunctionTypeIndex(function_type_section),
-                    });
-                    try label_stack.append(.{
-                        .kind = switch (op) {
-                            .block => .block,
-                            .loop => .loop,
-                            .@"if" => .@"if",
                             else => {
                                 return error.Unreachable;
                             },
                         },
-                        .payload_index = payload_index,
-                    });
+                        bt.toFunctionTypeIndex(function_type_section),
+                    );
                 },
 
                 .@"i32.const", .@"i64.const", .@"f32.const", .@"f64.const" => |op| {
@@ -381,70 +257,108 @@ fn readExpression(allocator: std.mem.Allocator, reader: ExpressionReader, functi
                         .@"f64.const" => try readValue(f64, reader),
                         else => return error.Unreachable,
                     };
-
-                    try instructions.append(.{
-                        .tag = .@"n.const",
-                        .payload_index = constant_payloads.len,
-                    });
-                    try constant_payloads.append(.{
-                        .value = value,
-                    });
+                    try builder.appendConst(value);
                 },
+
                 .@"v128.const" => {
                     return error.UnhandledOpcode;
                 },
 
-                .br_table => {
-                    try instructions.append(.{
-                        .tag = .branch_table,
-                        .payload_index = branch_table_payloads.len,
+                .call => {
+                    try builder.appendCall(.{
+                        .function_index = try std.leb.readULEB128(u32, reader),
                     });
-                    try branch_table_payloads.append(try readBranchTablePaylaod(allocator, reader));
+                },
+
+                .call_indirect => {
+                    try builder.appendCallIndirect(.{
+                        .function_type_index = try std.leb.readULEB128(u32, reader),
+                        .table_index = try std.leb.readULEB128(u32, reader),
+                    });
+                },
+
+                .@"i32.load", .@"i64.load", .@"f32.load", .@"f64.load", .@"i32.load8_s", .@"i32.load8_u", .@"i32.load16_s", .@"i32.load16_u", .@"i64.load8_s", .@"i64.load8_u", .@"i64.load16_s", .@"i64.load16_u", .@"i64.load32_s", .@"i64.load32_u", .@"i32.store", .@"i64.store", .@"f32.store", .@"f64.store", .@"i32.store8", .@"i32.store16", .@"i64.store8", .@"i64.store16", .@"i64.store32" => |op| {
+                    const tag: InstructionTag = switch (op) {
+                        .@"i32.load" => .@"i32.load",
+                        .@"i64.load" => .@"i64.load",
+                        .@"f32.load" => .@"f32.load",
+                        .@"f64.load" => .@"f64.load",
+                        .@"i32.load8_s" => .@"i32.load8_s",
+                        .@"i32.load8_u" => .@"i32.load8_u",
+                        .@"i32.load16_s" => .@"i32.load16_s",
+                        .@"i32.load16_u" => .@"i32.load16_u",
+                        .@"i64.load8_s" => .@"i64.load8_s",
+                        .@"i64.load8_u" => .@"i64.load8_u",
+                        .@"i64.load16_s" => .@"i64.load16_s",
+                        .@"i64.load16_u" => .@"i64.load16_u",
+                        .@"i64.load32_s" => .@"i64.load32_s",
+                        .@"i64.load32_u" => .@"i64.load32_u",
+                        .@"i32.store" => .@"i32.store",
+                        .@"i64.store" => .@"i64.store",
+                        .@"f32.store" => .@"f32.store",
+                        .@"f64.store" => .@"f64.store",
+                        .@"i32.store8" => .@"i32.store8",
+                        .@"i32.store16" => .@"i32.store16",
+                        .@"i64.store8" => .@"i64.store8",
+                        .@"i64.store16" => .@"i64.store16",
+                        .@"i64.store32" => .@"i64.store32",
+                        else => {
+                            return error.Unreachable;
+                        },
+                    };
+                    try builder.appendMemoryAccessor(tag, .{
+                        .@"align" = try std.leb.readULEB128(u32, reader),
+                        .offset = try std.leb.readULEB128(u32, reader),
+                    });
+                },
+
+                .br_table => {
+                    try builder.appendBranchTable(try readBranchTablePaylaod(allocator, reader));
                 },
 
                 .br, .br_if => |op| {
                     const label_index = try std.leb.readULEB128(LabelIndex, reader);
 
-                    if (label_index >= label_stack.len) {
-                        return error.InvalidLabelIndex;
-                    }
-
-                    try instructions.append(.{
-                        .tag = switch (op) {
-                            .br => .branch,
-                            .br_if => .branch_if,
-                            else => {
-                                return error.Unreachable;
-                            },
+                    try builder.appendBranch(switch (op) {
+                        .br => .branch,
+                        .br_if => .branch_if,
+                        else => {
+                            return error.Unreachable;
                         },
-                        .payload_index = branch_payloads.len,
-                    });
-                    try branch_payloads.append(.{
-                        .label_index = label_index,
-                    });
+                    }, label_index);
                 },
 
-                // tuple
-                inline .@"local.get", .@"local.set", .@"local.tee", .@"global.get", .@"global.set" => |code| {
-                    const tag_name = comptime @tagName(code);
-                    @setEvalBranchQuota(10_000);
-                    const tag = comptime std.meta.stringToEnum(InstructionTag, tag_name) orelse {
-                        @compileError("Missing InstructionTag: " ++ tag_name);
-                    };
-                    @setEvalBranchQuota(1000);
-                    const payload_index: InstructionPayloadIndex = std.math.cast(InstructionPayloadIndex, instruction_arguments.items.len) orelse {
-                        return error.TooManyInstructionArguments;
-                    };
+                .@"local.get", .@"local.set", .@"local.tee" => |op| {
+                    const local_index = try std.leb.readULEB128(u32, reader);
 
-                    const TupleType: type = comptime ArgumentsTypeOfInstruction(tag);
-                    const tuple: TupleType = try readTuple(TupleType, reader);
+                    try builder.appendLocalAccessor(switch (op) {
+                        .@"local.get" => .@"local.get",
+                        .@"local.set" => .@"local.set",
+                        .@"local.tee" => .@"local.tee",
+                        else => {
+                            return error.Unreachable;
+                        },
+                    }, local_index);
+                },
 
-                    const arguments = @unionInit(InstructionArguments, tag_name, tuple);
+                .@"global.get", .@"global.set" => |op| {
+                    const global_index = try std.leb.readULEB128(u32, reader);
 
-                    try instruction_arguments.append(arguments);
-                    try instructions.append(.{
-                        .tag = tag,
-                        .payload_index = payload_index,
+                    try builder.appendGlobalAccessor(switch (op) {
+                        .@"global.get" => .@"global.get",
+                        .@"global.set" => .@"global.set",
+                        else => {
+                            return error.Unreachable;
+                        },
+                    }, global_index);
+                },
+
+                .@"ref.null" => {
+                    const t = try readReferenceType(reader);
+
+                    try builder.appendTag(switch (t) {
+                        .function => .@"ref.null function",
+                        .@"extern" => .@"ref.null extern",
                     });
                 },
 
@@ -456,27 +370,7 @@ fn readExpression(allocator: std.mem.Allocator, reader: ExpressionReader, functi
         }
     }
 
-    if (label_stack.len != 0) {
-        return error.UnfinishedBusiness;
-    }
-
-    return Expression{
-        .instructions = try instructions.toOwnedSlice(),
-        .instruction_arguments = try instruction_arguments.toOwnedSlice(),
-        .branch_payloads = try allocAndCopySlice(allocator, BranchPayload, branch_payloads.slice()),
-        .label_payloads = try allocAndCopySlice(allocator, LabelPayload, label_payloads.slice()),
-        .constant_payloads = try allocAndCopySlice(allocator, ConstantPayload, constant_payloads.slice()),
-        .branch_table_payloads = try allocAndCopySlice(allocator, BranchTablePayload, branch_table_payloads.slice()),
-        .if_payloads = try allocAndCopySlice(allocator, IfPayload, if_payloads.slice()),
-    };
-}
-
-fn allocAndCopySlice(allocator: std.mem.Allocator, comptime T: type, source: []T) ![]T {
-    const result = try allocator.alloc(T, source.len);
-
-    std.mem.copyBackwards(T, result, source);
-
-    return result;
+    return try builder.build(allocator);
 }
 
 fn readFloat(comptime T: type, reader: anytype) !T {
@@ -541,16 +435,20 @@ fn readLocals(allocator: std.mem.Allocator, reader: Reader) ![]Local {
 
     for (locals) |*local| {
         const n = try std.leb.readULEB128(u32, reader);
-        const t = try readEnum(ValueTypeCode, reader);
 
         local.* = .{
             .n = n,
-            .type = t.toValueType(),
+            .type = try readValueType(reader),
         };
     }
 
     return locals;
 }
+
+const TableIndex = @import("./module.zig").TableIndex;
+const FunctionIndex = @import("./module.zig").FunctionIndex;
+const MemoryIndex = @import("./module.zig").MemoryIndex;
+const GlobalIndex = @import("./module.zig").GlobalIndex;
 
 fn readExportSection(allocator: std.mem.Allocator, reader: Reader) ![]Export {
     const count = try std.leb.readULEB128(u32, reader);
@@ -558,10 +456,34 @@ fn readExportSection(allocator: std.mem.Allocator, reader: Reader) ![]Export {
     const entries = try allocator.alloc(Export, count);
 
     for (entries) |*entry| {
+        const name = try readName(allocator, reader);
+        const descrition = try readEnum(ExportDescritionTypeCode, reader);
+        const index = try std.leb.readULEB128(u32, reader);
+
         entry.* = .{
-            .name = try readName(allocator, reader),
-            .type = (try readEnum(ExportDescritionTypeCode, reader)).toExportDescritionType(),
-            .index = try std.leb.readULEB128(u32, reader),
+            .name = name,
+            .index = switch (descrition) {
+                .function => .{
+                    .function = std.math.cast(FunctionIndex, index) orelse {
+                        return error.CastingError;
+                    },
+                },
+                .table => .{
+                    .table = std.math.cast(TableIndex, index) orelse {
+                        return error.CastingError;
+                    },
+                },
+                .memory => .{
+                    .memory = std.math.cast(MemoryIndex, index) orelse {
+                        return error.CastingError;
+                    },
+                },
+                .global => .{
+                    .global = std.math.cast(GlobalIndex, index) orelse {
+                        return error.CastingError;
+                    },
+                },
+            },
         };
     }
 
@@ -623,8 +545,8 @@ fn readFunctionTypeSection(allocator: std.mem.Allocator, reader: Reader) !Functi
         .results = &.{},
     };
 
-    inline for (std.meta.fields(ValueType), 0..) |f, i| {
-        function_types[count + 1 + i] = FunctionType{
+    inline for (std.meta.fields(ValueType), 1..) |f, i| {
+        function_types[count + i] = FunctionType{
             .parameters = &.{},
             .results = try allocResultTypeFromValueType(allocator, @enumFromInt(f.value)),
         };
@@ -641,35 +563,31 @@ fn readCodeSection(allocator: std.mem.Allocator, reader: Reader, function_type_s
 
     const codes = try allocator.alloc(FunctionBody, count);
 
-    for (codes) |*code| {
+    for (codes, 0..) |*code, function_index| {
         const code_size = try std.leb.readULEB128(u32, reader);
 
         const position_before_locals = try reader.context.getPos();
 
         const locals = try readLocals(allocator, reader);
-        const locals_size = try reader.context.getPos() - position_before_locals;
+
+        const starting_position = try reader.context.getPos();
+        const locals_size = starting_position - position_before_locals;
 
         const expression_size = code_size - locals_size;
-        var expression_reader = std.io.limitedReader(reader, expression_size);
 
         code.* = .{
             .locals = locals,
-            .expression = try readExpression(allocator, expression_reader.reader(), function_type_section),
+            .expression = readExpression(allocator, reader, function_type_section) catch |err| {
+                std.log.err("{s}: function_index={}", .{ @errorName(err), function_index });
+                return err;
+            },
         };
 
-        if (expression_reader.bytes_left != 0) {
-            std.log.err("ExpressionReaderHasBytesLeft: bytes_left={}", .{expression_reader.bytes_left});
+        const ending_position = try reader.context.getPos();
+        const processed_size = ending_position - starting_position;
 
-            var buf: [32]u8 = undefined;
-
-            if (expression_reader.bytes_left < buf.len) {
-                const r = try reader.read(buf[0..expression_reader.bytes_left]);
-
-                for (buf[0..r]) |b| {
-                    std.log.err("  0x{X:0>2}", .{b});
-                }
-            }
-
+        if (processed_size != expression_size) {
+            std.log.err("ExpressionReaderHasBytesLeft: expected={} given={}", .{ expression_size, processed_size });
             return error.ExpressionReaderHasBytesLeft;
         }
     }
@@ -699,6 +617,10 @@ pub fn readAllAlloc(allocator: std.mem.Allocator, reader: Reader) !Module {
     var maybe_function_type_section: ?FunctionTypeSection = null;
     var function_type_indices: []u32 = &.{};
     var function_bodies: []FunctionBody = &.{};
+    var tables: []Table = &.{};
+    var memory_limits: []Limits = &.{};
+    var element_segments: []ElementSegment = &.{};
+    var global_definitions: []GlobalDefinition = &.{};
 
     while (true) {
         const secton_id_raw = reader.readByte() catch |err| {
@@ -713,8 +635,10 @@ pub fn readAllAlloc(allocator: std.mem.Allocator, reader: Reader) !Module {
             return error.InvalidSectionId;
         }
 
-        const secton_id: SectionId = @enumFromInt(secton_id_raw);
+        const secton_id = try enumFromInt(SectionId, secton_id_raw);
         const section_size = try std.leb.readULEB128(u32, reader);
+
+        const starting_position = try reader.context.getPos();
 
         switch (secton_id) {
             .type_section => {
@@ -732,10 +656,36 @@ pub fn readAllAlloc(allocator: std.mem.Allocator, reader: Reader) !Module {
                 };
                 function_bodies = try readCodeSection(area_allocator, reader, &function_type_section);
             },
+            .table_section => {
+                tables = try readTableSection(area_allocator, reader);
+            },
+            .memory_section => {
+                memory_limits = try readMemorySection(area_allocator, reader);
+            },
+            .global_section => {
+                const function_type_section = maybe_function_type_section orelse {
+                    return error.NoTypeSection;
+                };
+                global_definitions = try readGlobalSection(area_allocator, reader, &function_type_section);
+            },
+            .element_section => {
+                const function_type_section = maybe_function_type_section orelse {
+                    return error.NoTypeSection;
+                };
+                element_segments = try readElementSection(area_allocator, reader, &function_type_section);
+            },
             else => {
                 std.log.info("Section {}: skiped", .{secton_id});
                 try reader.skipBytes(section_size, .{});
             },
+        }
+
+        const ending_position = try reader.context.getPos();
+        const processed_size = ending_position - starting_position;
+
+        if (section_size != processed_size) {
+            std.log.info("Section {}: expected={}, given={}", .{ secton_id, section_size, processed_size });
+            return error.WrongEndingPosition;
         }
     }
 
@@ -750,5 +700,159 @@ pub fn readAllAlloc(allocator: std.mem.Allocator, reader: Reader) !Module {
         .function_types = function_type_section.function_types,
         .function_type_indices = function_type_indices,
         .function_bodies = function_bodies,
+        .tables = tables,
+        .element_segments = element_segments,
+        .memory_limits = memory_limits,
+        .global_definitions = global_definitions,
     };
+}
+
+const Limits = @import("./module.zig").Limits;
+const ReferenceType = @import("./module.zig").ReferenceType;
+const Table = @import("./module.zig").Table;
+
+fn readLimits(reader: Reader) !Limits {
+    const selector = try reader.readByte();
+
+    switch (selector) {
+        0x00 => {
+            return .{
+                .min = try std.leb.readULEB128(u32, reader),
+            };
+        },
+        0x01 => {
+            const min = try std.leb.readULEB128(u32, reader);
+            const max = try std.leb.readULEB128(u32, reader);
+
+            if (max < min) {
+                return error.MalformedLimits;
+            }
+
+            return .{
+                .min = min,
+                .max = max,
+            };
+        },
+        else => return error.MalformedLimits,
+    }
+}
+
+fn readReferenceType(reader: Reader) !ReferenceType {
+    const selector = try reader.readByte();
+
+    return switch (selector) {
+        0x70 => .function,
+        0x6F => .@"extern",
+        else => return error.MalformedReferenceType,
+    };
+}
+
+fn readTableSection(allocator: std.mem.Allocator, reader: Reader) ![]Table {
+    const count = try std.leb.readULEB128(u32, reader);
+
+    const tables = try allocator.alloc(Table, count);
+
+    for (tables) |*table| {
+        table.* = .{
+            .type = try readReferenceType(reader),
+            .limits = try readLimits(reader),
+        };
+    }
+
+    return tables;
+}
+
+fn readMemorySection(allocator: std.mem.Allocator, reader: Reader) ![]Limits {
+    const count = try std.leb.readULEB128(u32, reader);
+
+    const entries = try allocator.alloc(Limits, count);
+
+    for (entries) |*entry| {
+        entry.* = try readLimits(reader);
+    }
+
+    return entries;
+}
+
+const GlobalDefinition = @import("./module.zig").GlobalDefinition;
+const Mutability = @import("./module.zig").Mutability;
+
+fn readGlobalSection(allocator: std.mem.Allocator, reader: Reader, section_type_section: *const FunctionTypeSection) ![]GlobalDefinition {
+    const count = try std.leb.readULEB128(u32, reader);
+
+    const entries = try allocator.alloc(GlobalDefinition, count);
+
+    for (entries) |*entry| {
+        entry.* = .{
+            .type = try readValueType(reader),
+            .mutability = try readMutability(reader),
+            .expression = try readExpression(allocator, reader, section_type_section),
+        };
+    }
+
+    return entries;
+}
+
+fn readMutability(reader: Reader) !Mutability {
+    const selector = try reader.readByte();
+
+    return switch (selector) {
+        0x00 => .constant,
+        0x01 => .variable,
+        else => return error.MalformedLimits,
+    };
+}
+
+const ElementSegment = @import("./module.zig").ElementSegment;
+
+fn createReferenceFunctionExpression(allocator: std.mem.Allocator, fn_idx: FunctionIndex) !Expression {
+    var builder: ExpressionBuilder = ExpressionBuilder.init(allocator);
+    defer builder.deinit();
+
+    try builder.appendReferenceFunction(fn_idx);
+    try builder.appendEnd();
+
+    return try builder.build(allocator);
+}
+
+fn readElementSection(allocator: std.mem.Allocator, reader: Reader, section_type_section: *const FunctionTypeSection) ![]ElementSegment {
+    const count = try std.leb.readULEB128(u32, reader);
+
+    const segments = try allocator.alloc(ElementSegment, count);
+
+    for (segments) |*seg| {
+        const selector = try std.leb.readULEB128(u32, reader);
+
+        switch (selector) {
+            0 => {
+                const offset = try readExpression(allocator, reader, section_type_section);
+
+                const fn_count = try std.leb.readULEB128(u32, reader);
+                const init = try allocator.alloc(Expression, fn_count);
+
+                for (init) |*e| {
+                    const fn_idx = try std.leb.readULEB128(u32, reader);
+
+                    e.* = try createReferenceFunctionExpression(allocator, fn_idx);
+                }
+
+                seg.* = .{
+                    .type = .function,
+                    .init = init,
+                    .mode = .{
+                        .active = .{
+                            .table = 0,
+                            .offset = offset,
+                        },
+                    },
+                };
+            },
+            else => |e| {
+                std.log.err("MalformedElementSegment: {}", .{e});
+                return error.MalformedElementSegment;
+            },
+        }
+    }
+
+    return segments;
 }

@@ -185,7 +185,10 @@ pub const InstructionTag = enum {
     @"i64.extend8_s",
     @"i64.extend16_s",
     @"i64.extend32_s",
-    @"ref.null",
+
+    @"ref.null function",
+    @"ref.null extern",
+
     @"ref.is_null",
     @"ref.func",
     @"i32.trunc_sat_f32_s",
