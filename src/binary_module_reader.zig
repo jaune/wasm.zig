@@ -840,6 +840,8 @@ pub fn readAllAlloc(allocator: std.mem.Allocator, reader: Reader) !Module {
         const secton_id: SectionId = @enumFromInt(secton_id_raw);
         const section_size = try std.leb.readULEB128(u32, reader);
 
+        const starting_position = try reader.context.getPos();
+
         switch (secton_id) {
             .type_section => {
                 maybe_function_type_section = try readFunctionTypeSection(area_allocator, reader);
@@ -856,10 +858,21 @@ pub fn readAllAlloc(allocator: std.mem.Allocator, reader: Reader) !Module {
                 };
                 function_bodies = try readCodeSection(area_allocator, reader, &function_type_section);
             },
+            .table_section => {
+                _ = try readTableSection(area_allocator, reader);
+            },
             else => {
                 std.log.info("Section {}: skiped", .{secton_id});
                 try reader.skipBytes(section_size, .{});
             },
+        }
+
+        const ending_position = try reader.context.getPos();
+        const processed_size = ending_position - starting_position;
+
+        if (section_size != processed_size) {
+            std.log.info("Section {}: expected={}, given={}", .{ secton_id, section_size, processed_size });
+            return error.WrongEndingPosition;
         }
     }
 
@@ -875,4 +888,52 @@ pub fn readAllAlloc(allocator: std.mem.Allocator, reader: Reader) !Module {
         .function_type_indices = function_type_indices,
         .function_bodies = function_bodies,
     };
+}
+
+const Limits = @import("./module.zig").Limits;
+const ReferenceType = @import("./module.zig").ReferenceType;
+const Table = @import("./module.zig").Table;
+
+fn readLimits(reader: Reader) !Limits {
+    const selector = try reader.readByte();
+
+    switch (selector) {
+        0x00 => {
+            return .{
+                .min = try std.leb.readULEB128(u32, reader),
+            };
+        },
+        0x01 => {
+            return .{
+                .min = try std.leb.readULEB128(u32, reader),
+                .max = try std.leb.readULEB128(u32, reader),
+            };
+        },
+        else => return error.MalformedLimits,
+    }
+}
+
+fn readReference(reader: Reader) !ReferenceType {
+    const selector = try reader.readByte();
+
+    return switch (selector) {
+        0x70 => .function,
+        0x6F => .@"extern",
+        else => return error.MalformedReference,
+    };
+}
+
+fn readTableSection(allocator: std.mem.Allocator, reader: Reader) ![]Table {
+    const count = try std.leb.readULEB128(u32, reader);
+
+    const tables = try allocator.alloc(Table, count);
+
+    for (tables) |*table| {
+        table.* = .{
+            .element = try readReference(reader),
+            .limits = try readLimits(reader),
+        };
+    }
+
+    return tables;
 }

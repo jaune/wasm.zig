@@ -178,3 +178,18 @@ pub const Instruction = struct {
     tag: InstructionTag,
     payload_index: ?InstructionPayloadIndex = null,
 };
+
+pub const ReferenceType = enum {
+    function,
+    @"extern",
+};
+
+pub const Table = struct {
+    element: ReferenceType,
+    limits: Limits,
+};
+
+pub const Limits = struct {
+    min: u32,
+    max: ?u32 = null,
+};
