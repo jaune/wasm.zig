@@ -861,6 +861,9 @@ pub fn readAllAlloc(allocator: std.mem.Allocator, reader: Reader) !Module {
             .table_section => {
                 _ = try readTableSection(area_allocator, reader);
             },
+            .memory_section => {
+                _ = try readMemorySection(area_allocator, reader);
+            },
             else => {
                 std.log.info("Section {}: skiped", .{secton_id});
                 try reader.skipBytes(section_size, .{});
@@ -936,4 +939,16 @@ fn readTableSection(allocator: std.mem.Allocator, reader: Reader) ![]Table {
     }
 
     return tables;
+}
+
+fn readMemorySection(allocator: std.mem.Allocator, reader: Reader) ![]Limits {
+    const count = try std.leb.readULEB128(u32, reader);
+
+    const entries = try allocator.alloc(Limits, count);
+
+    for (entries) |*entry| {
+        entry.* = try readLimits(reader);
+    }
+
+    return entries;
 }
