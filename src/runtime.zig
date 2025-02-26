@@ -269,6 +269,14 @@ fn executeExpression(module: *const Module, runtime: *Runtime, expression: *cons
         const instruction = expression.instructions[runtime.instruction_pointer];
 
         switch (instruction.tag) {
+            .nop => {
+                // NOTE: Do nothing.
+            },
+
+            .@"unreachable" => {
+                return error.Unreachable;
+            },
+
             .block, .loop => |tag| {
                 const payload_index = instruction.payload_index orelse {
                     std.log.err("execute {}", .{tag});

@@ -21,6 +21,7 @@ pub const FunctionType = struct {
 };
 
 pub const FunctionTypeIndex = u32;
+pub const FunctionIndex = u32;
 
 pub const Module = struct {
     area: std.heap.ArenaAllocator,
@@ -112,6 +113,22 @@ pub const IfPayload = struct {
     false: InstructionIndex,
 };
 
+pub const CallPayload = struct {
+    function_index: FunctionIndex,
+};
+
+pub const MemoryAccessorPayload = struct {
+    @"align": u32,
+    offset: u32,
+};
+
+const TableIndex = u32;
+
+pub const CallIndirectPayload = struct {
+    function_type_index: FunctionTypeIndex,
+    table_index: TableIndex,
+};
+
 pub const BranchPayload = struct {
     label_index: LabelIndex,
 };
@@ -150,6 +167,9 @@ pub const Expression = struct {
     constant_payloads: []ConstantPayload,
     branch_table_payloads: []BranchTablePayload,
     if_payloads: []IfPayload,
+    call_payloads: []CallPayload,
+    call_indirect_payloads: []CallIndirectPayload,
+    memory_accessor_payloads: []MemoryAccessorPayload,
 };
 
 pub const InstructionPayloadIndex = u16;
