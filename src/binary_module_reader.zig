@@ -5,7 +5,7 @@ const readOpcode = @import("./read_opcode.zig").readOpcode;
 const InstructionTag = @import("./instruction_tag.zig").InstructionTag;
 
 const Reader = std.fs.File.Reader;
-const ExpressionReader = std.io.LimitedReader(Reader).Reader;
+const FileReader = Reader;
 
 const Value = @import("./module.zig").Value;
 const ValueType = @import("./module.zig").ValueType;
@@ -127,13 +127,17 @@ fn allocResultTypeFromValueType(allocator: std.mem.Allocator, vt: ValueType) ![]
     return result_type;
 }
 
+fn readValueType(reader: Reader) !ValueType {
+    return (try readEnum(ValueTypeCode, reader)).toValueType();
+}
+
 fn readResultType(allocator: std.mem.Allocator, reader: Reader) ![]ValueType {
     const count = try std.leb.readULEB128(u32, reader);
 
     const result_type = try allocator.alloc(ValueType, count);
 
     for (result_type) |*value_type| {
-        value_type.* = (try readEnum(ValueTypeCode, reader)).toValueType();
+        value_type.* = try readValueType(reader);
     }
 
     return result_type;
@@ -153,8 +157,8 @@ const BlockType = union(enum) {
     }
 };
 
-fn readBlockType(reader: ExpressionReader) !BlockType {
-    var file_reader_context: std.fs.File = reader.context.inner_reader.context;
+fn readBlockType(reader: FileReader) !BlockType {
+    var file_reader_context: std.fs.File = reader.context;
 
     const starting_position = try file_reader_context.getPos();
 
@@ -163,7 +167,6 @@ fn readBlockType(reader: ExpressionReader) !BlockType {
     const b = try file_reader.readByte();
 
     if (b == 0x40) {
-        reader.context.bytes_left -= 1;
         return .empty;
     }
 
@@ -180,19 +183,15 @@ fn readBlockType(reader: ExpressionReader) !BlockType {
             return error.InvalidFunctionTypeIndex;
         };
 
-        reader.context.bytes_left -= (try file_reader_context.getPos()) - starting_position;
-
         return BlockType{
             .function_type_index = index,
         };
     };
 
-    reader.context.bytes_left -= 1;
-
     return BlockType{ .value_type = e.toValueType() };
 }
 
-fn readBranchTablePaylaod(allocator: std.mem.Allocator, reader: ExpressionReader) !BranchTablePayload {
+fn readBranchTablePaylaod(allocator: std.mem.Allocator, reader: FileReader) !BranchTablePayload {
     const count = try std.leb.readULEB128(u32, reader);
 
     const branches = try allocator.alloc(LabelIndex, count);
@@ -207,7 +206,7 @@ fn readBranchTablePaylaod(allocator: std.mem.Allocator, reader: ExpressionReader
     };
 }
 
-fn readValue(comptime T: type, reader: ExpressionReader) !Value {
+fn readValue(comptime T: type, reader: FileReader) !Value {
     return switch (T) {
         i32 => Value{ .i32 = try std.leb.readILEB128(i32, reader) },
         i64 => Value{ .i64 = try std.leb.readILEB128(i64, reader) },
@@ -228,7 +227,7 @@ const LabelStackEntry = struct {
     payload_index: InstructionPayloadIndex,
 };
 
-fn readExpression(allocator: std.mem.Allocator, reader: ExpressionReader, function_type_section: *const FunctionTypeSection) !Expression {
+fn readExpression(allocator: std.mem.Allocator, reader: FileReader, function_type_section: *const FunctionTypeSection) !Expression {
     var instructions = std.ArrayList(Instruction).init(allocator);
     var instruction_arguments = std.ArrayList(InstructionArguments).init(allocator);
 
@@ -662,11 +661,10 @@ fn readLocals(allocator: std.mem.Allocator, reader: Reader) ![]Local {
 
     for (locals) |*local| {
         const n = try std.leb.readULEB128(u32, reader);
-        const t = try readEnum(ValueTypeCode, reader);
 
         local.* = .{
             .n = n,
-            .type = t.toValueType(),
+            .type = try readValueType(reader),
         };
     }
 
@@ -768,32 +766,25 @@ fn readCodeSection(allocator: std.mem.Allocator, reader: Reader, function_type_s
         const position_before_locals = try reader.context.getPos();
 
         const locals = try readLocals(allocator, reader);
-        const locals_size = try reader.context.getPos() - position_before_locals;
+
+        const starting_position = try reader.context.getPos();
+        const locals_size = starting_position - position_before_locals;
 
         const expression_size = code_size - locals_size;
-        var expression_reader = std.io.limitedReader(reader, expression_size);
 
         code.* = .{
             .locals = locals,
-            .expression = readExpression(allocator, expression_reader.reader(), function_type_section) catch |err| {
+            .expression = readExpression(allocator, reader, function_type_section) catch |err| {
                 std.log.err("{s}: function_index={}", .{ @errorName(err), function_index });
                 return err;
             },
         };
 
-        if (expression_reader.bytes_left != 0) {
-            std.log.err("ExpressionReaderHasBytesLeft: bytes_left={}", .{expression_reader.bytes_left});
+        const ending_position = try reader.context.getPos();
+        const processed_size = ending_position - starting_position;
 
-            var buf: [32]u8 = undefined;
-
-            if (expression_reader.bytes_left < buf.len) {
-                const r = try reader.read(buf[0..expression_reader.bytes_left]);
-
-                for (buf[0..r]) |b| {
-                    std.log.err("  0x{X:0>2}", .{b});
-                }
-            }
-
+        if (processed_size != expression_size) {
+            std.log.err("ExpressionReaderHasBytesLeft: expected={} given={}", .{ expression_size, processed_size });
             return error.ExpressionReaderHasBytesLeft;
         }
     }
@@ -864,6 +855,12 @@ pub fn readAllAlloc(allocator: std.mem.Allocator, reader: Reader) !Module {
             .memory_section => {
                 _ = try readMemorySection(area_allocator, reader);
             },
+            .global_section => {
+                const function_type_section = maybe_function_type_section orelse {
+                    return error.NoTypeSection;
+                };
+                _ = try readGlobalSection(area_allocator, reader, &function_type_section);
+            },
             else => {
                 std.log.info("Section {}: skiped", .{secton_id});
                 try reader.skipBytes(section_size, .{});
@@ -916,13 +913,13 @@ fn readLimits(reader: Reader) !Limits {
     }
 }
 
-fn readReference(reader: Reader) !ReferenceType {
+fn readReferenceType(reader: Reader) !ReferenceType {
     const selector = try reader.readByte();
 
     return switch (selector) {
         0x70 => .function,
         0x6F => .@"extern",
-        else => return error.MalformedReference,
+        else => return error.MalformedReferenceType,
     };
 }
 
@@ -933,7 +930,7 @@ fn readTableSection(allocator: std.mem.Allocator, reader: Reader) ![]Table {
 
     for (tables) |*table| {
         table.* = .{
-            .element = try readReference(reader),
+            .element = try readReferenceType(reader),
             .limits = try readLimits(reader),
         };
     }
@@ -951,4 +948,33 @@ fn readMemorySection(allocator: std.mem.Allocator, reader: Reader) ![]Limits {
     }
 
     return entries;
+}
+
+const GlobalDefinition = @import("./module.zig").GlobalDefinition;
+const Mutability = @import("./module.zig").Mutability;
+
+fn readGlobalSection(allocator: std.mem.Allocator, reader: Reader, section_type_section: *const FunctionTypeSection) ![]GlobalDefinition {
+    const count = try std.leb.readULEB128(u32, reader);
+
+    const entries = try allocator.alloc(GlobalDefinition, count);
+
+    for (entries) |*entry| {
+        entry.* = .{
+            .type = try readValueType(reader),
+            .mutability = try readMutability(reader),
+            .expression = try readExpression(allocator, reader, section_type_section),
+        };
+    }
+
+    return entries;
+}
+
+fn readMutability(reader: Reader) !Mutability {
+    const selector = try reader.readByte();
+
+    return switch (selector) {
+        0x00 => .constant,
+        0x01 => .variable,
+        else => return error.MalformedLimits,
+    };
 }

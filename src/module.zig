@@ -193,3 +193,14 @@ pub const Limits = struct {
     min: u32,
     max: ?u32 = null,
 };
+
+pub const GlobalDefinition = struct {
+    type: ValueType,
+    mutability: Mutability,
+    expression: Expression,
+};
+
+pub const Mutability = enum {
+    constant,
+    variable,
+};
