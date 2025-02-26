@@ -89,16 +89,19 @@ pub fn logRuntime(runtime: *const Runtime) void {
     std.log.info("+++++", .{});
 }
 
+const FunctionIndex = @import("./module.zig").FunctionIndex;
+
 pub const Runtime = struct {
     const max_value_stack_capacity = 1024;
     const ValueStackLength: type = std.math.IntFittingRange(0, max_value_stack_capacity);
     const ValueStackType = std.BoundedArray(Value, max_value_stack_capacity);
 
     pub const CallStackEntry = struct {
+        function_index: FunctionIndex,
+        function_type_index: FunctionTypeTndex,
         results_start: ValueStackLength,
         locals_start: ValueStackLength,
         locals_length: ValueStackLength,
-        function_type_index: FunctionTypeTndex,
         labels_start: LabelStackLength,
     };
 
@@ -175,7 +178,7 @@ pub const Runtime = struct {
         return self.label_stack.pop();
     }
 
-    pub fn popValuesIntoSlice(self: *Self, results: []Value) !void {
+    pub fn popAnyValuesIntoSlice(self: *Self, results: []Value) !void {
         for (results) |*result| {
             const value: Value = self.value_stack.popOrNull() orelse {
                 return error.ValueStackEmpty;
@@ -275,6 +278,52 @@ fn executeExpression(module: *const Module, runtime: *Runtime, expression: *cons
 
             .@"unreachable" => {
                 return error.Unreachable;
+            },
+
+            .call => {
+                const payload_index = instruction.payload_index orelse {
+                    return error.NoPayloadIndex;
+                };
+                const payload = expression.call_payloads[payload_index];
+                const function_index = payload.function_index;
+                const function_type_index = module.function_type_indices[function_index];
+                const function_type = module.function_types[function_type_index];
+                const function_body = module.function_bodies[function_index];
+
+                const frame = try runtime.peekCurrentCall();
+
+                if (runtime.value_stack.len < (frame.results_start + function_type.parameters.len)) {
+                    return error.NotEnoughValuesOnTheStack;
+                }
+
+                const parameters_length = std.math.cast(Runtime.ValueStackLength, function_type.parameters.len) orelse {
+                    return error.TooBig;
+                };
+
+                const parameters_start = runtime.value_stack.len - parameters_length;
+
+                for (function_type.parameters, runtime.value_stack.slice()[parameters_start..]) |pt, v| {
+                    try v.assertValueType(pt);
+                }
+
+                try pushLocals(runtime, function_body.locals);
+
+                const function_body_locals_len = std.math.cast(Runtime.ValueStackLength, function_body.locals.len) orelse {
+                    return error.TooBig;
+                };
+
+                const locals_length = parameters_length + function_body_locals_len;
+
+                try runtime.call_stack.append(.{
+                    .function_index = function_index,
+                    .function_type_index = function_type_index,
+                    .labels_start = runtime.label_stack.len,
+                    .locals_start = parameters_start,
+                    .locals_length = locals_length,
+                    .results_start = runtime.value_stack.len,
+                });
+
+                return error.NotImplementedYet;
             },
 
             .block, .loop => |tag| {
@@ -510,10 +559,11 @@ pub fn invokeFunction(m: *const Module, runtime: *Runtime, func_idx: u32, parame
     const results_start = runtime.value_stack.len + locals_length;
 
     try runtime.call_stack.append(.{
+        .function_index = func_idx,
+        .function_type_index = function_type_index,
         .results_start = results_start,
         .locals_start = runtime.value_stack.len,
         .locals_length = locals_length,
-        .function_type_index = function_type_index,
         .labels_start = runtime.label_stack.len,
     });
 
@@ -561,7 +611,37 @@ pub fn invokeFunction(m: *const Module, runtime: *Runtime, func_idx: u32, parame
         }
     }
 
-    for (function_body.locals) |l| {
+    try pushLocals(runtime, function_body.locals);
+
+    if (results_start != runtime.value_stack.len) {
+        return error.AssertValueStack;
+    }
+
+    try executeExpression(m, runtime, &function_body.expression);
+
+    // catch |err| {
+    //     // logFunctionBody(&function_body);
+    //     // logRuntime(runtime);
+
+    //     std.log.err("ADRIEN !!!! {}", .{err});
+
+    //     return err;
+    // };
+
+    try runtime.popAnyValuesIntoSlice(results);
+
+    if (runtime.value_stack.len != 0) {
+        return error.UnfinishedBusiness;
+    }
+    if (runtime.call_stack.len != 0) {
+        return error.UnfinishedBusiness;
+    }
+}
+
+const Local = @import("./module.zig").Local;
+
+fn pushLocals(runtime: *Runtime, locals: []Local) !void {
+    for (locals) |l| {
         switch (l.type) {
             .i32 => {
                 try runtime.pushNZeroValues(i32, l.n);
@@ -579,29 +659,5 @@ pub fn invokeFunction(m: *const Module, runtime: *Runtime, func_idx: u32, parame
                 return error.UnsupportedParameterType;
             },
         }
-    }
-
-    if (results_start != runtime.value_stack.len) {
-        return error.AssertValueStack;
-    }
-
-    try executeExpression(m, runtime, &function_body.expression);
-
-    // catch |err| {
-    //     // logFunctionBody(&function_body);
-    //     // logRuntime(runtime);
-
-    //     std.log.err("ADRIEN !!!! {}", .{err});
-
-    //     return err;
-    // };
-
-    try runtime.popValuesIntoSlice(results);
-
-    if (runtime.value_stack.len != 0) {
-        return error.UnfinishedBusiness;
-    }
-    if (runtime.call_stack.len != 0) {
-        return error.UnfinishedBusiness;
     }
 }

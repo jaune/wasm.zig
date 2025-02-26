@@ -719,10 +719,6 @@ pub fn @"f64.copysign"(runtime: *Runtime) !void {
     try @"f.copysign"(f64, runtime);
 }
 
-pub fn call(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
-}
 pub fn call_indirect(runtime: *Runtime) !void {
     _ = runtime;
     return error.NotImplementedYet;

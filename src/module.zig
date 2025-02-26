@@ -82,6 +82,12 @@ pub const Value = union(ValueType) {
     function_reference: void,
     extern_reference: void,
 
+    pub fn assertValueType(v: Value, vt: ValueType) !void {
+        if (std.meta.activeTag(v) != vt) {
+            return error.AssertValueType;
+        }
+    }
+
     pub fn eql(a: Value, b: Value) bool {
         if (std.meta.activeTag(a) != std.meta.activeTag(b)) {
             return false;
