@@ -861,6 +861,12 @@ pub fn readAllAlloc(allocator: std.mem.Allocator, reader: Reader) !Module {
                 };
                 _ = try readGlobalSection(area_allocator, reader, &function_type_section);
             },
+            .element_section => {
+                const function_type_section = maybe_function_type_section orelse {
+                    return error.NoTypeSection;
+                };
+                _ = try readElementSection(area_allocator, reader, &function_type_section);
+            },
             else => {
                 std.log.info("Section {}: skiped", .{secton_id});
                 try reader.skipBytes(section_size, .{});
@@ -977,4 +983,31 @@ fn readMutability(reader: Reader) !Mutability {
         0x01 => .variable,
         else => return error.MalformedLimits,
     };
+}
+
+const FunctionIndex = @import("./module.zig").FunctionIndex;
+
+fn readElementSection(allocator: std.mem.Allocator, reader: Reader, section_type_section: *const FunctionTypeSection) !void {
+    const count = try std.leb.readULEB128(u32, reader);
+
+    for (0..count) |_| {
+        const selector = try std.leb.readULEB128(u32, reader);
+
+        switch (selector) {
+            0 => {
+                _ = try readExpression(allocator, reader, section_type_section);
+
+                const fn_count = try std.leb.readULEB128(u32, reader);
+                const function_indices = try allocator.alloc(FunctionIndex, fn_count);
+
+                for (function_indices) |*fn_idx| {
+                    fn_idx.* = try std.leb.readULEB128(u32, reader);
+                }
+            },
+            else => |e| {
+                std.log.err("MalformedElement: {}", .{e});
+                return error.MalformedElement;
+            },
+        }
+    }
 }
