@@ -231,6 +231,11 @@ fn assertReturn(allocator: std.mem.Allocator, mod: *const module.Module, command
 
                 std.log.err("assert_return: {s}: {d}: expected={}, given={} ", .{ action.field, command.line, erv, r });
 
+                if (std.meta.activeTag(erv) != std.meta.activeTag(r)) {
+                    std.log.err("expected={}, given={}", .{ erv, r });
+                    return error.NoMatchingValueType;
+                }
+
                 switch (erv) {
                     .f32 => std.log.err("expected=b{b}, given=b{b}", .{ @as(u32, @bitCast(erv.f32)), @as(u32, @bitCast(r.f32)) }),
                     .f64 => std.log.err("expected=b{b}, given=b{b}", .{ @as(u64, @bitCast(erv.f64)), @as(u64, @bitCast(r.f64)) }),

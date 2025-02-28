@@ -48,7 +48,7 @@ pub const Runtime = struct {
         parameters_start: ValueStackLength,
     };
 
-    const max_call_stack_capacity = 12;
+    const max_call_stack_capacity = 512;
     const CallStackType = std.BoundedArray(CallStackEntry, max_call_stack_capacity);
 
     const max_label_stack_capacity = 1024;
@@ -125,13 +125,14 @@ pub const Runtime = struct {
     }
 
     pub fn popAnyValuesIntoSlice(self: *Self, results: []Value) !void {
-        for (results) |*result| {
-            const value: Value = self.value_stack.popOrNull() orelse {
-                return error.ValueStackEmpty;
-            };
+        const values = self.value_stack.slice();
 
+        for (results, values[(self.value_stack.len - results.len)..]) |*result, value| {
             result.* = value;
         }
+        self.value_stack.len -= std.math.cast(ValueStackLength, results.len) orelse {
+            return error.CastingError;
+        };
     }
 
     pub fn popAnyValue(self: *Self) !Value {
