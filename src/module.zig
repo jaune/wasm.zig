@@ -2,17 +2,21 @@ const std = @import("std");
 
 pub const InstructionTag = @import("./instruction_tag.zig").InstructionTag;
 
-pub const Export = struct {
-    pub const DescritionType = enum {
-        function,
-        table,
-        memory,
-        global,
-    };
+pub const MemoryIndex = u32;
+pub const GlobalIndex = u32;
+pub const TableIndex = u32;
+pub const FunctionIndex = u32;
 
-    index: u32,
+const AnyIndex = union(enum) {
+    function: FunctionIndex,
+    table: TableIndex,
+    memory: MemoryIndex,
+    global: GlobalIndex,
+};
+
+pub const Export = struct {
+    index: AnyIndex,
     name: []const u8,
-    type: DescritionType,
 };
 
 pub const FunctionType = struct {
@@ -21,7 +25,6 @@ pub const FunctionType = struct {
 };
 
 pub const FunctionTypeIndex = u32;
-pub const FunctionIndex = u32;
 
 pub const Module = struct {
     area: std.heap.ArenaAllocator,
@@ -31,17 +34,42 @@ pub const Module = struct {
     function_types: []FunctionType,
     function_type_indices: []FunctionTypeIndex,
     function_bodies: []FunctionBody,
+    tables: []Table,
+    element_segments: []ElementSegment,
+    memory_limits: []Limits,
+    global_definitions: []GlobalDefinition,
 
     const Self = @This();
 
-    pub fn findExportedFunctionIndex(self: *const Self, name: []const u8) ?u32 {
+    pub fn findExportedFunctionIndex(self: *const Self, name: []const u8) ?FunctionIndex {
         for (self.exports) |e| {
-            if (e.type == .function and std.mem.eql(u8, name, e.name)) {
-                return e.index;
+            switch (e.index) {
+                .function => |idx| {
+                    if (std.mem.eql(u8, name, e.name)) {
+                        return idx;
+                    }
+                },
+                else => {},
             }
         }
 
         return null;
+    }
+
+    pub fn getFunctionTypeIndex(self: *const Self, fn_index: FunctionIndex) !FunctionTypeIndex {
+        if (fn_index >= self.function_type_indices.len) {
+            return error.OutOfBounds;
+        }
+
+        return self.function_type_indices[fn_index];
+    }
+
+    pub fn getFunctionType(self: *const Self, fn_index: FunctionIndex) !FunctionType {
+        if (fn_index >= self.function_type_indices.len) {
+            return error.OutOfBounds;
+        }
+
+        return self.function_types[self.function_type_indices[fn_index]];
     }
 
     pub fn deinit(self: Self) void {
@@ -72,6 +100,9 @@ pub const ValueType = enum {
     extern_reference,
 };
 
+pub const FunctionReference = u32;
+pub const ExternFunctionReference = u32;
+
 pub const Value = union(ValueType) {
     i32: i32,
     i64: i64,
@@ -79,8 +110,8 @@ pub const Value = union(ValueType) {
     f64: f64,
 
     v128: void,
-    function_reference: void,
-    extern_reference: void,
+    function_reference: FunctionReference,
+    extern_reference: ExternFunctionReference,
 
     pub fn assertValueType(v: Value, vt: ValueType) !void {
         if (std.meta.activeTag(v) != vt) {
@@ -128,7 +159,17 @@ pub const MemoryAccessorPayload = struct {
     offset: u32,
 };
 
-const TableIndex = u32;
+pub const LocalAccessorPayload = struct {
+    local_index: u32,
+};
+
+pub const GlobalAccessorPayload = struct {
+    global_index: u32,
+};
+
+pub const FunctionReferencePayload = struct {
+    function_index: FunctionTypeIndex,
+};
 
 pub const CallIndirectPayload = struct {
     function_type_index: FunctionTypeIndex,
@@ -148,25 +189,8 @@ pub const BranchTablePayload = struct {
     fallback: LabelIndex,
 };
 
-pub const InstructionArguments = union {
-    @"local.get": Tuple(&[_]type{u32}),
-    @"local.set": Tuple(&[_]type{u32}),
-    @"local.tee": Tuple(&[_]type{u32}),
-
-    @"global.get": Tuple(&[_]type{u32}),
-    @"global.set": Tuple(&[_]type{u32}),
-};
-
-pub fn ArgumentsTypeOfInstruction(comptime tag: InstructionTag) type {
-    const field_index = std.meta.fieldIndex(InstructionArguments, @tagName(tag)) orelse {
-        @compileError("InstructionArguments no argument type for " ++ @tagName(tag));
-    };
-    return std.meta.fields(InstructionArguments)[field_index].type;
-}
-
 pub const Expression = struct {
     instructions: []Instruction,
-    instruction_arguments: []InstructionArguments,
 
     branch_payloads: []BranchPayload,
     label_payloads: []LabelPayload,
@@ -176,6 +200,27 @@ pub const Expression = struct {
     call_payloads: []CallPayload,
     call_indirect_payloads: []CallIndirectPayload,
     memory_accessor_payloads: []MemoryAccessorPayload,
+    local_accessor_payloads: []LocalAccessorPayload,
+    global_accessor_payloads: []GlobalAccessorPayload,
+    function_reference_payloads: []FunctionReferencePayload,
+
+    const Self = @This();
+
+    pub fn free(self: *Self, allocator: std.mem.Allocator) void {
+        allocator.free(self.instructions);
+
+        allocator.free(self.branch_payloads);
+        allocator.free(self.label_payloads);
+        allocator.free(self.constant_payloads);
+        allocator.free(self.branch_table_payloads);
+        allocator.free(self.if_payloads);
+        allocator.free(self.call_payloads);
+        allocator.free(self.call_indirect_payloads);
+        allocator.free(self.memory_accessor_payloads);
+        allocator.free(self.local_accessor_payloads);
+        allocator.free(self.global_accessor_payloads);
+        allocator.free(self.function_reference_payloads);
+    }
 };
 
 pub const InstructionPayloadIndex = u16;
@@ -191,13 +236,28 @@ pub const ReferenceType = enum {
 };
 
 pub const Table = struct {
-    element: ReferenceType,
+    type: ReferenceType,
     limits: Limits,
 };
 
 pub const Limits = struct {
     min: u32,
     max: ?u32 = null,
+};
+
+pub const ElementSegment = struct {
+    const Mode = union(enum) {
+        passive: void,
+        decalrative: void,
+        active: struct {
+            table: u32,
+            offset: Expression,
+        },
+    };
+
+    init: []Expression,
+    type: ReferenceType,
+    mode: Mode,
 };
 
 pub const GlobalDefinition = struct {
@@ -210,3 +270,56 @@ pub const Mutability = enum {
     constant,
     variable,
 };
+
+pub fn logExpression(expression: *const Expression) void {
+    for (expression.instructions, 0..) |e, i| {
+        switch (e.tag) {
+            .@"n.const" => {
+                const payload_index = e.payload_index.?;
+                const payload = expression.constant_payloads[payload_index];
+
+                std.log.info("{}: {s} (value={})", .{ i, @tagName(e.tag), payload.value });
+            },
+            .@"if" => {
+                const payload_index = e.payload_index.?;
+                const payload = expression.if_payloads[payload_index];
+
+                std.log.info("{}: {s} (true={} false={})", .{
+                    i,
+                    @tagName(e.tag),
+                    payload.true,
+                    payload.false,
+                });
+            },
+            .block => {
+                const payload_index = e.payload_index.?;
+                const payload = expression.label_payloads[payload_index];
+
+                std.log.info("{}: {s} (start={} end={} function_type_index={})", .{
+                    i,
+                    @tagName(e.tag),
+                    payload.start,
+                    payload.end,
+                    payload.function_type_index,
+                });
+            },
+            else => {
+                std.log.info("{}: {s}", .{ i, @tagName(e.tag) });
+            },
+        }
+    }
+}
+
+pub fn logFunctionBody(body: *const FunctionBody) void {
+    std.log.info("+ FunctionBody +", .{});
+
+    std.log.info("++ Locals ++", .{});
+    for (body.locals, 0..) |l, i| {
+        std.log.info("{}: {}", .{ i, l });
+    }
+
+    std.log.info("++ Expression ++", .{});
+    logExpression(body.expression);
+
+    std.log.info("+++++", .{});
+}

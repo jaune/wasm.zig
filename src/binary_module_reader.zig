@@ -16,8 +16,6 @@ const FunctionType = @import("./module.zig").FunctionType;
 const FunctionBody = @import("./module.zig").FunctionBody;
 const Module = @import("./module.zig").Module;
 const Expression = @import("./module.zig").Expression;
-const InstructionArguments = @import("./module.zig").InstructionArguments;
-const ArgumentsTypeOfInstruction = @import("./module.zig").ArgumentsTypeOfInstruction;
 const InstructionIndex = @import("./module.zig").InstructionIndex;
 const InstructionPayloadIndex = @import("./module.zig").InstructionPayloadIndex;
 const LabelIndex = @import("./module.zig").LabelIndex;
@@ -30,6 +28,8 @@ const IfPayload = @import("./module.zig").IfPayload;
 const CallPayload = @import("./module.zig").CallPayload;
 const CallIndirectPayload = @import("./module.zig").CallIndirectPayload;
 const MemoryAccessorPayload = @import("./module.zig").MemoryAccessorPayload;
+
+const logExpression = @import("./module.zig").logExpression;
 
 const ValueTypeCode = enum(u8) {
     i32 = 0x7F,
@@ -61,15 +61,6 @@ const ExportDescritionTypeCode = enum(u8) {
     table = 0x01,
     memory = 0x02,
     global = 0x03,
-
-    fn toExportDescritionType(v: ExportDescritionTypeCode) Export.DescritionType {
-        return switch (v) {
-            .function => .function,
-            .table => .table,
-            .memory => .memory,
-            .global => .global,
-        };
-    }
 };
 
 fn intToEnumOrNull(comptime E: type, raw: u8) ?E {
@@ -216,218 +207,48 @@ fn readValue(comptime T: type, reader: FileReader) !Value {
     };
 }
 
-const LabelKind = enum {
-    loop,
-    block,
-    @"if",
-    @"else",
-};
-const LabelStackEntry = struct {
-    kind: LabelKind,
-    payload_index: InstructionPayloadIndex,
-};
+const ExpressionBuilder = @import("./expression_builder.zig").ExpressionBuilder;
 
 fn readExpression(allocator: std.mem.Allocator, reader: FileReader, function_type_section: *const FunctionTypeSection) !Expression {
-    var instructions = std.ArrayList(Instruction).init(allocator);
-    var instruction_arguments = std.ArrayList(InstructionArguments).init(allocator);
+    var builder: ExpressionBuilder = ExpressionBuilder.init(allocator);
+    defer builder.deinit();
 
-    var label_stack = try std.BoundedArray(LabelStackEntry, 1024).init(0);
-    var branch_payloads = try std.BoundedArray(BranchPayload, 1024).init(0);
-    var label_payloads = try std.BoundedArray(LabelPayload, 1024).init(0);
-    var if_payloads = try std.BoundedArray(IfPayload, 1024).init(0);
-    var constant_payloads = try std.BoundedArray(ConstantPayload, 1024).init(0);
-    var branch_table_payloads = try std.BoundedArray(BranchTablePayload, 1024).init(0);
-    var call_payloads = try std.BoundedArray(CallPayload, 1024).init(0);
-    var call_indirect_payloads = try std.BoundedArray(CallIndirectPayload, 1024).init(0);
-    var memory_accessor_payloads = try std.BoundedArray(MemoryAccessorPayload, 1024).init(0);
-
-    while (true) {
+    while (!builder.is_expression_completed) {
         const opcode = try readOpcode(reader);
 
         const maybe_simple_tag = instructionTagFromOpcode(opcode);
 
         if (maybe_simple_tag) |tag| {
-            try instructions.append(.{ .tag = tag });
+            try builder.appendTag(tag);
         } else {
             switch (opcode) {
                 .end => {
-                    if (label_stack.len == 0) {
-                        try instructions.append(.{ .tag = .expression_end });
-                        break;
-                    }
-
-                    const instruction_index: InstructionIndex = std.math.cast(InstructionIndex, instructions.items.len) orelse {
-                        return error.TooManyInstruction;
-                    };
-
-                    const entry = label_stack.pop();
-
-                    const label_payload = &label_payloads.slice()[entry.payload_index];
-
-                    switch (entry.kind) {
-                        .loop => {
-                            try instructions.append(.{ .tag = .loop_end });
-
-                            label_payload.end = instruction_index;
-                        },
-                        .block => {
-                            try instructions.append(.{ .tag = .block_end });
-
-                            label_payload.end = instruction_index;
-                        },
-                        .@"if" => {
-                            try instructions.append(.{ .tag = .block_end });
-
-                            label_payload.end = instruction_index;
-
-                            const if_instruction = instructions.items[label_payload.start - 1];
-                            if (if_instruction.tag != .@"if") {
-                                for (instructions.items) |i| {
-                                    std.log.debug("{}", .{i});
-                                }
-
-                                std.log.err("expected={}, given={}", .{ InstructionTag.@"if", if_instruction.tag });
-                                return error.PreviousInstructionShouldBeIf;
-                            }
-                            const if_instruction_payload_index = if_instruction.payload_index orelse {
-                                return error.NullPayload;
-                            };
-                            const if_instruction_payload = &if_payloads.slice()[if_instruction_payload_index];
-
-                            if_instruction_payload.false = instruction_index;
-                        },
-                        .@"else" => {
-                            try instructions.append(.{ .tag = .block_end });
-
-                            label_payload.end = instruction_index;
-
-                            const if_label = label_stack.pop();
-
-                            if (if_label.kind != .@"if") {
-                                return error.PreviousLabelShouldBeIf;
-                            }
-                            const if_label_payload = &label_payloads.slice()[if_label.payload_index];
-
-                            if_label_payload.end = instruction_index;
-
-                            const if_instruction = instructions.items[if_label_payload.start - 1];
-                            if (if_instruction.tag != .@"if") {
-                                return error.PreviousInstructionShouldBeIf;
-                            }
-                            const if_instruction_payload_index = if_instruction.payload_index orelse {
-                                return error.NullPayload;
-                            };
-                            const if_instruction_payload = &if_payloads.slice()[if_instruction_payload_index];
-
-                            if_instruction_payload.false = label_payload.start;
-                        },
-                    }
+                    try builder.appendEnd();
                 },
 
                 .@"else" => {
-                    try instructions.append(.{
-                        .tag = .block_end,
-                    });
-
-                    const instruction_index: InstructionIndex = std.math.cast(InstructionIndex, instructions.items.len) orelse {
-                        return error.TooManyInstruction;
-                    };
-
-                    const if_label = label_stack.get(label_stack.len - 1);
-                    const if_label_payload = label_payloads.slice()[if_label.payload_index];
-
-                    if (if_label.kind != .@"if") {
-                        return error.PreviousLabelShouldBeIf;
-                    }
-
-                    const if_instruction = instructions.items[if_label_payload.start - 1];
-                    const if_instruction_payload = &if_payloads.slice()[if_instruction.payload_index.?];
-
-                    if_instruction_payload.false = instruction_index;
-
-                    const payload_index = label_payloads.len;
-                    try instructions.append(.{
-                        .tag = .block,
-                        .payload_index = payload_index,
-                    });
-                    try label_payloads.append(.{
-                        .start = instruction_index,
-                        .end = instruction_index,
-                        .function_type_index = if_label_payload.function_type_index,
-                    });
-                    try label_stack.append(.{
-                        .kind = .@"else",
-                        .payload_index = payload_index,
-                    });
+                    try builder.appendElse();
                 },
 
                 .@"if" => {
                     const bt = try readBlockType(reader);
 
-                    const instruction_index: InstructionIndex = std.math.cast(InstructionIndex, instructions.items.len) orelse {
-                        return error.TooManyInstruction;
-                    };
-
-                    const block_instruction_index = instruction_index + 1;
-
-                    try instructions.append(.{
-                        .tag = .@"if",
-                        .payload_index = if_payloads.len,
-                    });
-                    try if_payloads.append(.{
-                        .true = block_instruction_index,
-                        .false = 0,
-                    });
-
-                    const payload_index = label_payloads.len;
-                    try instructions.append(.{
-                        .tag = .block,
-                        .payload_index = payload_index,
-                    });
-                    try label_payloads.append(.{
-                        .start = block_instruction_index,
-                        .end = 0,
-                        .function_type_index = bt.toFunctionTypeIndex(function_type_section),
-                    });
-                    try label_stack.append(.{
-                        .kind = .@"if",
-                        .payload_index = payload_index,
-                    });
+                    try builder.appendIf(bt.toFunctionTypeIndex(function_type_section));
                 },
 
                 .block, .loop => |op| {
                     const bt = try readBlockType(reader);
 
-                    const instruction_index: InstructionIndex = std.math.cast(InstructionIndex, instructions.items.len) orelse {
-                        return error.TooManyInstruction;
-                    };
-
-                    const payload_index = label_payloads.len;
-                    try instructions.append(.{
-                        .tag = switch (op) {
+                    try builder.appendBlock(
+                        switch (op) {
                             .block => .block,
                             .loop => .loop,
-                            .@"if" => .@"if",
-                            else => return error.Unreachable,
-                        },
-                        .payload_index = payload_index,
-                    });
-                    try label_payloads.append(.{
-                        .start = instruction_index,
-                        .end = instruction_index,
-                        .function_type_index = bt.toFunctionTypeIndex(function_type_section),
-                    });
-                    try label_stack.append(.{
-                        .kind = switch (op) {
-                            .block => .block,
-                            .loop => .loop,
-                            .@"if" => .@"if",
                             else => {
                                 return error.Unreachable;
                             },
                         },
-                        .payload_index = payload_index,
-                    });
+                        bt.toFunctionTypeIndex(function_type_section),
+                    );
                 },
 
                 .@"i32.const", .@"i64.const", .@"f32.const", .@"f64.const" => |op| {
@@ -438,14 +259,7 @@ fn readExpression(allocator: std.mem.Allocator, reader: FileReader, function_typ
                         .@"f64.const" => try readValue(f64, reader),
                         else => return error.Unreachable,
                     };
-
-                    try instructions.append(.{
-                        .tag = .@"n.const",
-                        .payload_index = constant_payloads.len,
-                    });
-                    try constant_payloads.append(.{
-                        .value = value,
-                    });
+                    try builder.appendConst(value);
                 },
 
                 .@"v128.const" => {
@@ -453,116 +267,92 @@ fn readExpression(allocator: std.mem.Allocator, reader: FileReader, function_typ
                 },
 
                 .call => {
-                    try instructions.append(.{
-                        .tag = .call,
-                        .payload_index = call_payloads.len,
-                    });
-                    try call_payloads.append(.{
+                    try builder.appendCall(.{
                         .function_index = try std.leb.readULEB128(u32, reader),
                     });
                 },
 
                 .call_indirect => {
-                    try instructions.append(.{
-                        .tag = .call_indirect,
-                        .payload_index = call_indirect_payloads.len,
-                    });
-                    try call_indirect_payloads.append(.{
+                    try builder.appendCallIndirect(.{
                         .function_type_index = try std.leb.readULEB128(u32, reader),
                         .table_index = try std.leb.readULEB128(u32, reader),
                     });
                 },
 
-                .@"i32.load", .@"i64.load", .@"f32.load", .@"f64.load", .@"i32.load8_s", .@"i32.load8_u", .@"i32.load16_s", .@"i32.load16_u", .@"i64.load8_s", .@"i64.load8_u", .@"i64.load16_s", .@"i64.load16_u", .@"i64.load32_s", .@"i64.load32_u", .@"i32.store", .@"i64.store", .@"f32.store", .@"f64.store", .@"i32.store8", .@"i32.store16", .@"i64.store8", .@"i64.store16", .@"i64.store32" => |tag| {
-                    try instructions.append(.{
-                        .tag = switch (tag) {
-                            .@"i32.load" => .@"i32.load",
-                            .@"i64.load" => .@"i64.load",
-                            .@"f32.load" => .@"f32.load",
-                            .@"f64.load" => .@"f64.load",
-                            .@"i32.load8_s" => .@"i32.load8_s",
-                            .@"i32.load8_u" => .@"i32.load8_u",
-                            .@"i32.load16_s" => .@"i32.load16_s",
-                            .@"i32.load16_u" => .@"i32.load16_u",
-                            .@"i64.load8_s" => .@"i64.load8_s",
-                            .@"i64.load8_u" => .@"i64.load8_u",
-                            .@"i64.load16_s" => .@"i64.load16_s",
-                            .@"i64.load16_u" => .@"i64.load16_u",
-                            .@"i64.load32_s" => .@"i64.load32_s",
-                            .@"i64.load32_u" => .@"i64.load32_u",
-                            .@"i32.store" => .@"i32.store",
-                            .@"i64.store" => .@"i64.store",
-                            .@"f32.store" => .@"f32.store",
-                            .@"f64.store" => .@"f64.store",
-                            .@"i32.store8" => .@"i32.store8",
-                            .@"i32.store16" => .@"i32.store16",
-                            .@"i64.store8" => .@"i64.store8",
-                            .@"i64.store16" => .@"i64.store16",
-                            .@"i64.store32" => .@"i64.store32",
-                            else => {
-                                return error.Unreachable;
-                            },
+                .@"i32.load", .@"i64.load", .@"f32.load", .@"f64.load", .@"i32.load8_s", .@"i32.load8_u", .@"i32.load16_s", .@"i32.load16_u", .@"i64.load8_s", .@"i64.load8_u", .@"i64.load16_s", .@"i64.load16_u", .@"i64.load32_s", .@"i64.load32_u", .@"i32.store", .@"i64.store", .@"f32.store", .@"f64.store", .@"i32.store8", .@"i32.store16", .@"i64.store8", .@"i64.store16", .@"i64.store32" => |op| {
+                    const tag: InstructionTag = switch (op) {
+                        .@"i32.load" => .@"i32.load",
+                        .@"i64.load" => .@"i64.load",
+                        .@"f32.load" => .@"f32.load",
+                        .@"f64.load" => .@"f64.load",
+                        .@"i32.load8_s" => .@"i32.load8_s",
+                        .@"i32.load8_u" => .@"i32.load8_u",
+                        .@"i32.load16_s" => .@"i32.load16_s",
+                        .@"i32.load16_u" => .@"i32.load16_u",
+                        .@"i64.load8_s" => .@"i64.load8_s",
+                        .@"i64.load8_u" => .@"i64.load8_u",
+                        .@"i64.load16_s" => .@"i64.load16_s",
+                        .@"i64.load16_u" => .@"i64.load16_u",
+                        .@"i64.load32_s" => .@"i64.load32_s",
+                        .@"i64.load32_u" => .@"i64.load32_u",
+                        .@"i32.store" => .@"i32.store",
+                        .@"i64.store" => .@"i64.store",
+                        .@"f32.store" => .@"f32.store",
+                        .@"f64.store" => .@"f64.store",
+                        .@"i32.store8" => .@"i32.store8",
+                        .@"i32.store16" => .@"i32.store16",
+                        .@"i64.store8" => .@"i64.store8",
+                        .@"i64.store16" => .@"i64.store16",
+                        .@"i64.store32" => .@"i64.store32",
+                        else => {
+                            return error.Unreachable;
                         },
-                        .payload_index = memory_accessor_payloads.len,
-                    });
-                    try memory_accessor_payloads.append(.{
+                    };
+                    try builder.appendMemoryAccessor(tag, .{
                         .@"align" = try std.leb.readULEB128(u32, reader),
                         .offset = try std.leb.readULEB128(u32, reader),
                     });
                 },
 
                 .br_table => {
-                    try instructions.append(.{
-                        .tag = .branch_table,
-                        .payload_index = branch_table_payloads.len,
-                    });
-                    try branch_table_payloads.append(try readBranchTablePaylaod(allocator, reader));
+                    try builder.appendBranchTable(try readBranchTablePaylaod(allocator, reader));
                 },
 
                 .br, .br_if => |op| {
                     const label_index = try std.leb.readULEB128(LabelIndex, reader);
 
-                    if (label_index >= label_stack.len) {
-                        return error.InvalidLabelIndex;
-                    }
-
-                    try instructions.append(.{
-                        .tag = switch (op) {
-                            .br => .branch,
-                            .br_if => .branch_if,
-                            else => {
-                                return error.Unreachable;
-                            },
+                    try builder.appendBranch(switch (op) {
+                        .br => .branch,
+                        .br_if => .branch_if,
+                        else => {
+                            return error.Unreachable;
                         },
-                        .payload_index = branch_payloads.len,
-                    });
-                    try branch_payloads.append(.{
-                        .label_index = label_index,
-                    });
+                    }, label_index);
                 },
 
-                // tuple
-                inline .@"local.get", .@"local.set", .@"local.tee", .@"global.get", .@"global.set" => |code| {
-                    const tag_name = comptime @tagName(code);
-                    @setEvalBranchQuota(10_000);
-                    const tag = comptime std.meta.stringToEnum(InstructionTag, tag_name) orelse {
-                        @compileError("Missing InstructionTag: " ++ tag_name);
-                    };
-                    @setEvalBranchQuota(1000);
-                    const payload_index: InstructionPayloadIndex = std.math.cast(InstructionPayloadIndex, instruction_arguments.items.len) orelse {
-                        return error.TooManyInstructionArguments;
-                    };
+                .@"local.get", .@"local.set", .@"local.tee" => |op| {
+                    const local_index = try std.leb.readULEB128(u32, reader);
 
-                    const TupleType: type = comptime ArgumentsTypeOfInstruction(tag);
-                    const tuple: TupleType = try readTuple(TupleType, reader);
+                    try builder.appendLocalAccessor(switch (op) {
+                        .@"local.get" => .@"local.get",
+                        .@"local.set" => .@"local.set",
+                        .@"local.tee" => .@"local.tee",
+                        else => {
+                            return error.Unreachable;
+                        },
+                    }, local_index);
+                },
 
-                    const arguments = @unionInit(InstructionArguments, tag_name, tuple);
+                .@"global.get", .@"global.set" => |op| {
+                    const global_index = try std.leb.readULEB128(u32, reader);
 
-                    try instruction_arguments.append(arguments);
-                    try instructions.append(.{
-                        .tag = tag,
-                        .payload_index = payload_index,
-                    });
+                    try builder.appendGlobalAccessor(switch (op) {
+                        .@"global.get" => .@"global.get",
+                        .@"global.set" => .@"global.set",
+                        else => {
+                            return error.Unreachable;
+                        },
+                    }, global_index);
                 },
 
                 else => {
@@ -573,30 +363,7 @@ fn readExpression(allocator: std.mem.Allocator, reader: FileReader, function_typ
         }
     }
 
-    if (label_stack.len != 0) {
-        return error.UnfinishedBusiness;
-    }
-
-    return Expression{
-        .instructions = try instructions.toOwnedSlice(),
-        .instruction_arguments = try instruction_arguments.toOwnedSlice(),
-        .branch_payloads = try allocAndCopySlice(allocator, BranchPayload, branch_payloads.slice()),
-        .label_payloads = try allocAndCopySlice(allocator, LabelPayload, label_payloads.slice()),
-        .constant_payloads = try allocAndCopySlice(allocator, ConstantPayload, constant_payloads.slice()),
-        .branch_table_payloads = try allocAndCopySlice(allocator, BranchTablePayload, branch_table_payloads.slice()),
-        .if_payloads = try allocAndCopySlice(allocator, IfPayload, if_payloads.slice()),
-        .call_payloads = try allocAndCopySlice(allocator, CallPayload, call_payloads.slice()),
-        .call_indirect_payloads = try allocAndCopySlice(allocator, CallIndirectPayload, call_indirect_payloads.slice()),
-        .memory_accessor_payloads = try allocAndCopySlice(allocator, MemoryAccessorPayload, memory_accessor_payloads.slice()),
-    };
-}
-
-fn allocAndCopySlice(allocator: std.mem.Allocator, comptime T: type, source: []T) ![]T {
-    const result = try allocator.alloc(T, source.len);
-
-    std.mem.copyBackwards(T, result, source);
-
-    return result;
+    return try builder.build(allocator);
 }
 
 fn readFloat(comptime T: type, reader: anytype) !T {
@@ -671,16 +438,45 @@ fn readLocals(allocator: std.mem.Allocator, reader: Reader) ![]Local {
     return locals;
 }
 
+const TableIndex = @import("./module.zig").TableIndex;
+const FunctionIndex = @import("./module.zig").FunctionIndex;
+const MemoryIndex = @import("./module.zig").MemoryIndex;
+const GlobalIndex = @import("./module.zig").GlobalIndex;
+
 fn readExportSection(allocator: std.mem.Allocator, reader: Reader) ![]Export {
     const count = try std.leb.readULEB128(u32, reader);
 
     const entries = try allocator.alloc(Export, count);
 
     for (entries) |*entry| {
+        const name = try readName(allocator, reader);
+        const descrition = try readEnum(ExportDescritionTypeCode, reader);
+        const index = try std.leb.readULEB128(u32, reader);
+
         entry.* = .{
-            .name = try readName(allocator, reader),
-            .type = (try readEnum(ExportDescritionTypeCode, reader)).toExportDescritionType(),
-            .index = try std.leb.readULEB128(u32, reader),
+            .name = name,
+            .index = switch (descrition) {
+                .function => .{
+                    .function = std.math.cast(FunctionIndex, index) orelse {
+                        return error.CastingError;
+                    },
+                },
+                .table => .{
+                    .table = std.math.cast(TableIndex, index) orelse {
+                        return error.CastingError;
+                    },
+                },
+                .memory => .{
+                    .memory = std.math.cast(MemoryIndex, index) orelse {
+                        return error.CastingError;
+                    },
+                },
+                .global => .{
+                    .global = std.math.cast(GlobalIndex, index) orelse {
+                        return error.CastingError;
+                    },
+                },
+            },
         };
     }
 
@@ -814,6 +610,10 @@ pub fn readAllAlloc(allocator: std.mem.Allocator, reader: Reader) !Module {
     var maybe_function_type_section: ?FunctionTypeSection = null;
     var function_type_indices: []u32 = &.{};
     var function_bodies: []FunctionBody = &.{};
+    var tables: []Table = &.{};
+    var memory_limits: []Limits = &.{};
+    var element_segments: []ElementSegment = &.{};
+    var global_definitions: []GlobalDefinition = &.{};
 
     while (true) {
         const secton_id_raw = reader.readByte() catch |err| {
@@ -828,7 +628,7 @@ pub fn readAllAlloc(allocator: std.mem.Allocator, reader: Reader) !Module {
             return error.InvalidSectionId;
         }
 
-        const secton_id: SectionId = @enumFromInt(secton_id_raw);
+        const secton_id = try enumFromInt(SectionId, secton_id_raw);
         const section_size = try std.leb.readULEB128(u32, reader);
 
         const starting_position = try reader.context.getPos();
@@ -850,22 +650,22 @@ pub fn readAllAlloc(allocator: std.mem.Allocator, reader: Reader) !Module {
                 function_bodies = try readCodeSection(area_allocator, reader, &function_type_section);
             },
             .table_section => {
-                _ = try readTableSection(area_allocator, reader);
+                tables = try readTableSection(area_allocator, reader);
             },
             .memory_section => {
-                _ = try readMemorySection(area_allocator, reader);
+                memory_limits = try readMemorySection(area_allocator, reader);
             },
             .global_section => {
                 const function_type_section = maybe_function_type_section orelse {
                     return error.NoTypeSection;
                 };
-                _ = try readGlobalSection(area_allocator, reader, &function_type_section);
+                global_definitions = try readGlobalSection(area_allocator, reader, &function_type_section);
             },
             .element_section => {
                 const function_type_section = maybe_function_type_section orelse {
                     return error.NoTypeSection;
                 };
-                _ = try readElementSection(area_allocator, reader, &function_type_section);
+                element_segments = try readElementSection(area_allocator, reader, &function_type_section);
             },
             else => {
                 std.log.info("Section {}: skiped", .{secton_id});
@@ -893,6 +693,10 @@ pub fn readAllAlloc(allocator: std.mem.Allocator, reader: Reader) !Module {
         .function_types = function_type_section.function_types,
         .function_type_indices = function_type_indices,
         .function_bodies = function_bodies,
+        .tables = tables,
+        .element_segments = element_segments,
+        .memory_limits = memory_limits,
+        .global_definitions = global_definitions,
     };
 }
 
@@ -910,9 +714,16 @@ fn readLimits(reader: Reader) !Limits {
             };
         },
         0x01 => {
+            const min = try std.leb.readULEB128(u32, reader);
+            const max = try std.leb.readULEB128(u32, reader);
+
+            if (max < min) {
+                return error.MalformedLimits;
+            }
+
             return .{
-                .min = try std.leb.readULEB128(u32, reader),
-                .max = try std.leb.readULEB128(u32, reader),
+                .min = min,
+                .max = max,
             };
         },
         else => return error.MalformedLimits,
@@ -936,7 +747,7 @@ fn readTableSection(allocator: std.mem.Allocator, reader: Reader) ![]Table {
 
     for (tables) |*table| {
         table.* = .{
-            .element = try readReferenceType(reader),
+            .type = try readReferenceType(reader),
             .limits = try readLimits(reader),
         };
     }
@@ -985,29 +796,56 @@ fn readMutability(reader: Reader) !Mutability {
     };
 }
 
-const FunctionIndex = @import("./module.zig").FunctionIndex;
+const ElementSegment = @import("./module.zig").ElementSegment;
 
-fn readElementSection(allocator: std.mem.Allocator, reader: Reader, section_type_section: *const FunctionTypeSection) !void {
+fn createReferenceFunctionExpression(allocator: std.mem.Allocator, fn_idx: FunctionIndex) !Expression {
+    var builder: ExpressionBuilder = ExpressionBuilder.init(allocator);
+    defer builder.deinit();
+
+    try builder.appendReferenceFunction(fn_idx);
+    try builder.appendEnd();
+
+    return try builder.build(allocator);
+}
+
+fn readElementSection(allocator: std.mem.Allocator, reader: Reader, section_type_section: *const FunctionTypeSection) ![]ElementSegment {
     const count = try std.leb.readULEB128(u32, reader);
 
-    for (0..count) |_| {
+    const segments = try allocator.alloc(ElementSegment, count);
+
+    for (segments) |*seg| {
         const selector = try std.leb.readULEB128(u32, reader);
 
         switch (selector) {
             0 => {
-                _ = try readExpression(allocator, reader, section_type_section);
+                const offset = try readExpression(allocator, reader, section_type_section);
 
                 const fn_count = try std.leb.readULEB128(u32, reader);
-                const function_indices = try allocator.alloc(FunctionIndex, fn_count);
+                const init = try allocator.alloc(Expression, fn_count);
 
-                for (function_indices) |*fn_idx| {
-                    fn_idx.* = try std.leb.readULEB128(u32, reader);
+                for (init) |*e| {
+                    const fn_idx = try std.leb.readULEB128(u32, reader);
+
+                    e.* = try createReferenceFunctionExpression(allocator, fn_idx);
                 }
+
+                seg.* = .{
+                    .type = .function,
+                    .init = init,
+                    .mode = .{
+                        .active = .{
+                            .table = 0,
+                            .offset = offset,
+                        },
+                    },
+                };
             },
             else => |e| {
-                std.log.err("MalformedElement: {}", .{e});
-                return error.MalformedElement;
+                std.log.err("MalformedElementSegment: {}", .{e});
+                return error.MalformedElementSegment;
             },
         }
     }
+
+    return segments;
 }

@@ -7,12 +7,13 @@ const math = @import("./math.zig");
 
 pub fn @"local.get"(runtime: *Runtime, localidx: u32) !void {
     const frame = try runtime.peekCurrentCall();
+    const value_stack_index = frame.parameters_start + localidx;
 
-    if (localidx >= frame.locals_length) {
-        return error.InvalidLocalIndex;
+    if (value_stack_index >= frame.results_start) {
+        return error.AssertLocalIndex;
     }
 
-    const value = runtime.value_stack.get(frame.locals_start + localidx);
+    const value = runtime.value_stack.get(value_stack_index);
 
     try runtime.value_stack.append(value);
 }
@@ -23,12 +24,13 @@ pub fn @"local.set"(runtime: *Runtime, localidx: u32) !void {
     }
 
     const frame = &runtime.call_stack.slice()[runtime.call_stack.len - 1];
+    const value_stack_index = frame.parameters_start + localidx;
 
-    if (localidx >= frame.locals_length) {
-        return error.InvalidLocalIndex;
+    if (value_stack_index >= frame.results_start) {
+        return error.AssertLocalIndex;
     }
 
-    runtime.value_stack.slice()[frame.locals_start + localidx] = try runtime.popAnyValue();
+    runtime.value_stack.slice()[value_stack_index] = try runtime.popAnyValue();
 }
 
 pub fn @"local.tee"(runtime: *Runtime, localidx: u32) !void {
@@ -719,14 +721,13 @@ pub fn @"f64.copysign"(runtime: *Runtime) !void {
     try @"f.copysign"(f64, runtime);
 }
 
-pub fn call_indirect(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
-}
-
 pub fn select(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
+    const c = try runtime.popValue(i32);
+
+    const a = try runtime.popAnyValue();
+    const b = try runtime.popAnyValue();
+
+    try runtime.pushAnyValue(if (c == 0) a else b);
 }
 pub fn select_t(runtime: *Runtime) !void {
     _ = runtime;
@@ -973,10 +974,6 @@ pub fn @"ref.null"(runtime: *Runtime) !void {
     return error.NotImplementedYet;
 }
 pub fn @"ref.is_null"(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
-}
-pub fn @"ref.func"(runtime: *Runtime) !void {
     _ = runtime;
     return error.NotImplementedYet;
 }

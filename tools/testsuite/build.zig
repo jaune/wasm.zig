@@ -23,6 +23,10 @@ pub fn build(b: *std.Build) !void {
         .optimize = .Debug,
     });
 
+    const i = b.addInstallArtifact(wast_json_runner_exe, .{});
+
+    run.dependOn(&i.step);
+
     for (base_filenames) |base_filename| {
         const run_wast2json_exe = b.addRunArtifact(wast2json_exe);
 
@@ -43,17 +47,17 @@ pub fn build(b: *std.Build) !void {
 }
 
 const base_filenames = [_][]const u8{
-    // "f32",
-    // "f32_bitwise",
-    // "f32_cmp",
-    // "f64",
-    // "f64_cmp",
-    // "f64_bitwise",
-    // "i32",
-    // "i64",
-    // "conversions",
-    // "local_get",
-    "block",
+    "f32",
+    "f32_bitwise",
+    "f32_cmp",
+    "f64",
+    "f64_cmp",
+    "f64_bitwise",
+    "i32",
+    "i64",
+    "conversions",
+    "local_get",
+    // "block",
 };
 
 const AddWastJsonRunner = struct {

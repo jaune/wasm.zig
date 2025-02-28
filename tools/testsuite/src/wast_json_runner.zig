@@ -3,6 +3,8 @@ const std = @import("std");
 const wasm = @import("jaune:wasm-runtime");
 const runtime = wasm.runtime;
 const module = wasm.module;
+const Program = wasm.program.Program;
+
 const BinaryModuleReader = wasm.BinaryModuleReader;
 
 pub fn main() !void {
@@ -118,10 +120,8 @@ fn assertTrap(allocator: std.mem.Allocator, mod: *const module.Module, command: 
     }
 
     const fn_index = mod.findExportedFunctionIndex(action.field) orelse {
-        return error.NoFunction;
+        return error.MissingExportedFunction;
     };
-
-    var rt = runtime.Runtime.init();
 
     const parameters = try allocator.alloc(runtime.Value, action.args.len);
     defer allocator.free(parameters);
@@ -130,7 +130,7 @@ fn assertTrap(allocator: std.mem.Allocator, mod: *const module.Module, command: 
         p.* = try a.toRuntimeValue();
     }
 
-    const funciton_type = mod.function_types[mod.function_type_indices[fn_index]];
+    const funciton_type = try mod.getFunctionType(fn_index);
 
     const results = try allocator.alloc(runtime.Value, funciton_type.results.len);
     defer allocator.free(results);
@@ -140,13 +140,14 @@ fn assertTrap(allocator: std.mem.Allocator, mod: *const module.Module, command: 
         return error.MissingErrorFromText;
     };
 
-    // std.log.info("assert_trap: {d}", .{command.line});
+    var program = runtime.Program.init(allocator);
+    defer program.deinit();
 
-    // for (parameters, 0..) |p, i| {
-    //     std.log.err("{d}: {}", .{ i, p });
-    // }
+    const mod_idx = try program.instantiateModule(mod);
 
-    runtime.invokeFunction(mod, &rt, fn_index, parameters, results) catch |given| {
+    var rt = runtime.Runtime.init(&program);
+
+    runtime.invokeFunction(allocator, &rt, mod_idx, fn_index, parameters, results) catch |given| {
         if (given != expected) {
             std.log.err("assert_trap: {s}: {d}: expected={}, given={} ", .{ action.field, command.line, expected, given });
             return error.Fail;
@@ -188,8 +189,6 @@ fn assertReturn(allocator: std.mem.Allocator, mod: *const module.Module, command
         return error.NoFunction;
     };
 
-    var rt = runtime.Runtime.init();
-
     const parameters = try allocator.alloc(runtime.Value, action.args.len);
     defer allocator.free(parameters);
 
@@ -200,7 +199,14 @@ fn assertReturn(allocator: std.mem.Allocator, mod: *const module.Module, command
     const results = try allocator.alloc(runtime.Value, expected.len);
     defer allocator.free(results);
 
-    runtime.invokeFunction(mod, &rt, fn_index, parameters, results) catch |err| {
+    var program = runtime.Program.init(allocator);
+    defer program.deinit();
+
+    const mod_idx = try program.instantiateModule(mod);
+
+    var rt = runtime.Runtime.init(&program);
+
+    runtime.invokeFunction(allocator, &rt, mod_idx, fn_index, parameters, results) catch |err| {
         std.log.err("assert_return: {s}: {d}: error: {}", .{ action.field, command.line, err });
 
         std.log.err("+ parameters", .{});
@@ -212,6 +218,8 @@ fn assertReturn(allocator: std.mem.Allocator, mod: *const module.Module, command
 
         return err;
     };
+
+    var has_fail = false;
 
     for (expected, results) |e, r| {
         if (!try e.testRuntimeValue(r)) {
@@ -237,8 +245,14 @@ fn assertReturn(allocator: std.mem.Allocator, mod: *const module.Module, command
             for (parameters, 0..) |p, i| {
                 std.log.err("{d}: {}", .{ i, p });
             }
-            return error.Fail;
+
+            has_fail = true;
         }
+    }
+
+    if (has_fail) {
+        runtime.logRuntime(&rt);
+        return error.Fail;
     }
 }
 
