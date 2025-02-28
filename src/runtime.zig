@@ -15,11 +15,10 @@ const FunctionBody = @import("./module.zig").FunctionBody;
 const ReferenceType = @import("./module.zig").ReferenceType;
 const Limits = @import("./module.zig").Limits;
 const FunctionReference = @import("./module.zig").FunctionReference;
+const ModuleInstanceIndex = @import("./module.zig").ModuleInstanceIndex;
+const AnyReference = @import("./module.zig").AnyReference;
 
-const ModuleInstanceIndex = @import("./program.zig").ModuleInstanceIndex;
 pub const Program = @import("./program.zig").Program;
-
-const ArgumentsTypeOfInstruction = @import("./module.zig").ArgumentsTypeOfInstruction;
 
 const InstructionFunctions = @import("./instruction_functions.zig");
 
@@ -147,13 +146,14 @@ pub const Runtime = struct {
         try self.value_stack.append(value);
     }
 
-    pub fn popValueFunctionReference(self: *Self) !FunctionReference {
+    pub fn popAnyReferenceValue(self: *Self) !AnyReference {
         const value: Value = self.value_stack.popOrNull() orelse {
             return error.ValueStackEmpty;
         };
 
         return switch (value) {
-            .function_reference => |r| r,
+            .function_reference => |r| .{ .function = r },
+            .extern_reference => |r| .{ .@"extern" = r },
             else => error.WrongType,
         };
     }
@@ -282,9 +282,18 @@ pub fn executeExpression(runtime: *Runtime, root_module_instance_index: ModuleIn
                 const module_instance_index = current_frame.module_instance_index;
                 const module_instance = runtime.program.module_instances.get(module_instance_index);
 
-                const function_index = try module_instance.getFunctionIndexFromTable(payload.table_index, element_index, payload.function_type_index);
+                const reference = try module_instance.getAnyElement(payload.table_index, element_index);
 
-                try pushCall(runtime, module_instance_index, function_index);
+                // TODO: assert function/exten fucntion_type match
+
+                const ref: FunctionReference = switch (reference) {
+                    .function => |ref| ref,
+                    else => {
+                        return error.Unsupported;
+                    },
+                };
+
+                try pushCall(runtime, ref.module_instance_index, ref.function_index);
 
                 current_frame = &runtime.call_stack.slice()[runtime.call_stack.len - 1].frame;
             },
@@ -485,10 +494,10 @@ pub fn executeExpression(runtime: *Runtime, root_module_instance_index: ModuleIn
                 const payload = expression.function_reference_payloads[payload_index];
 
                 try runtime.value_stack.append(.{
-                    .function_reference = try runtime.program.getFunctionReference(
-                        current_frame.module_instance_index,
-                        payload.function_index,
-                    ),
+                    .function_reference = .{
+                        .module_instance_index = current_frame.module_instance_index,
+                        .function_index = payload.function_index,
+                    },
                 });
                 current_frame.instruction_pointer += 1;
             },

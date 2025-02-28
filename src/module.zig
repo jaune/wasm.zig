@@ -2,6 +2,27 @@ const std = @import("std");
 
 pub const InstructionTag = @import("./instruction_tag.zig").InstructionTag;
 
+pub const max_module_instances = 10;
+pub const ModuleInstanceIndex: type = std.math.IntFittingRange(0, max_module_instances);
+
+pub const FunctionReference = struct {
+    module_instance_index: ModuleInstanceIndex,
+    function_index: FunctionIndex,
+};
+
+pub const max_extern_functions = 255;
+pub const ExternReference: type = std.math.IntFittingRange(0, max_extern_functions);
+
+pub const ReferenceType = enum {
+    function,
+    @"extern",
+};
+
+pub const AnyReference = union(ReferenceType) {
+    function: FunctionReference,
+    @"extern": ExternReference,
+};
+
 pub const MemoryIndex = u32;
 pub const GlobalIndex = u32;
 pub const TableIndex = u32;
@@ -100,9 +121,6 @@ pub const ValueType = enum {
     extern_reference,
 };
 
-pub const FunctionReference = u32;
-pub const ExternFunctionReference = u32;
-
 pub const Value = union(ValueType) {
     i32: i32,
     i64: i64,
@@ -110,8 +128,9 @@ pub const Value = union(ValueType) {
     f64: f64,
 
     v128: void,
+
     function_reference: FunctionReference,
-    extern_reference: ExternFunctionReference,
+    extern_reference: ExternReference,
 
     pub fn assertValueType(v: Value, vt: ValueType) !void {
         if (std.meta.activeTag(v) != vt) {
@@ -228,11 +247,6 @@ pub const InstructionPayloadIndex = u16;
 pub const Instruction = struct {
     tag: InstructionTag,
     payload_index: ?InstructionPayloadIndex = null,
-};
-
-pub const ReferenceType = enum {
-    function,
-    @"extern",
 };
 
 pub const Table = struct {

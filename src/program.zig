@@ -6,23 +6,31 @@ const Module = @import("./module.zig").Module;
 const FunctionIndex = @import("./module.zig").FunctionIndex;
 const FunctionTypeIndex = @import("./module.zig").FunctionTypeIndex;
 const Expression = @import("./module.zig").Expression;
-const ExpressionBuilder = @import("./expression_builder.zig").ExpressionBuilder;
-const FunctionType = @import("./expression_builder.zig").ExpressionBuilder;
+const FunctionReference = @import("./module.zig").FunctionReference;
+const FunctionBody = @import("./module.zig").FunctionBody;
+const ModuleInstanceIndex = @import("./module.zig").ModuleInstanceIndex;
+const AnyReference = @import("./module.zig").AnyReference;
+
+const max_module_instances = @import("./module.zig").max_module_instances;
 
 const logExpression = @import("./module.zig").logExpression;
 const logRuntime = @import("./runtime.zig").logRuntime;
 
+const ExpressionBuilder = @import("./expression_builder.zig").ExpressionBuilder;
+const FunctionType = @import("./expression_builder.zig").ExpressionBuilder;
+
 const Runtime = @import("./runtime.zig").Runtime;
+
 const executeExpression = @import("./runtime.zig").executeExpression;
 
 const TableInstance = struct {
     type: ReferenceType,
     limits: Limits,
-    elements: []u32,
+    elements: []AnyReference,
 
     const Self = @This();
 
-    pub fn getElement(self: *const Self, i: usize) !u32 {
+    pub fn getAnyElement(self: *const Self, i: usize) !AnyReference {
         if (i >= self.elements.len) {
             return error.OutOfBounds;
         }
@@ -30,7 +38,7 @@ const TableInstance = struct {
         return self.elements[i];
     }
 
-    pub fn setElement(self: *const Self, i: usize, value: u32) !void {
+    pub fn setAnyElement(self: *const Self, i: usize, value: AnyReference) !void {
         if (i >= self.elements.len) {
             return error.OutOfBounds;
         }
@@ -64,7 +72,7 @@ const ModuleInstance = struct {
             ti.* = .{
                 .type = t.type,
                 .limits = t.limits,
-                .elements = try allocator.alloc(u32, max),
+                .elements = try allocator.alloc(AnyReference, max),
             };
         }
 
@@ -82,55 +90,24 @@ const ModuleInstance = struct {
         self.tables = &.{};
     }
 
-    pub fn getFunctionIndexFromTable(self: *const Self, table_index: usize, element_index: usize, function_type_index: FunctionTypeIndex) !FunctionIndex {
-        const function_index = try self.getElement(.function, table_index, element_index);
-
-        std.log.debug("function_index= {x}", .{function_index});
-
-        const fti = try self.module.getFunctionTypeIndex(function_index);
-
-        if (fti != function_type_index) {
-            return error.InvalidFunctionTypeIndex;
-        }
-
-        return function_index;
-    }
-
-    pub fn getElement(self: *const Self, rt: ReferenceType, table_index: usize, element_index: usize) !u32 {
+    pub fn getAnyElement(self: *const Self, table_index: usize, element_index: usize) !AnyReference {
         if (table_index >= self.tables.len) {
             return error.OutOfBounds;
         }
 
-        const t = &self.tables[table_index];
-
-        if (t.type != rt) {
-            return error.WrongTableType;
-        }
-
-        return t.getElement(element_index);
+        return self.tables[table_index].getAnyElement(element_index);
     }
 
-    pub fn setElement(self: *const Self, rt: ReferenceType, table_index: usize, element_index: usize, value: u32) !void {
+    pub fn setAnyElement(self: *const Self, table_index: usize, element_index: usize, value: AnyReference) !void {
         if (table_index >= self.tables.len) {
             return error.OutOfBounds;
         }
 
-        const t = &self.tables[table_index];
-
-        if (t.type != rt) {
-            return error.WrongTableType;
-        }
-
-        try self.tables[table_index].setElement(element_index, value);
+        try self.tables[table_index].setAnyElement(element_index, value);
     }
 };
 
-const max_module_instances_capacity = 10;
-pub const ModuleInstanceIndex: type = std.math.IntFittingRange(0, max_module_instances_capacity - 1);
-pub const ModuleInstanceBoundedArray = std.BoundedArray(ModuleInstance, max_module_instances_capacity);
-
-const FunctionReference = @import("./module.zig").FunctionReference;
-const FunctionBody = @import("./module.zig").FunctionBody;
+pub const ModuleInstanceBoundedArray = std.BoundedArray(ModuleInstance, max_module_instances);
 
 const FunctionInstance = struct {
     function_index: FunctionIndex,
@@ -138,11 +115,9 @@ const FunctionInstance = struct {
 };
 
 pub const Program = struct {
-    module_instances: ModuleInstanceBoundedArray,
     allocator: std.mem.Allocator,
 
-    // functions: []FunctionInstance,
-    // tables: []TableInstance,
+    module_instances: ModuleInstanceBoundedArray,
 
     const Self = @This();
 
@@ -160,14 +135,6 @@ pub const Program = struct {
         self.module_instances.len = 0;
     }
 
-    pub fn getFunctionReference(self: *const Self, m_idx: ModuleInstanceIndex, f_idx: FunctionIndex) !FunctionReference {
-        _ = self;
-        _ = m_idx;
-        _ = f_idx;
-
-        return 0xF0F;
-    }
-
     pub fn instantiateModule(self: *Self, module: *const Module) !ModuleInstanceIndex {
         const i = try ModuleInstance.init(self.allocator, module);
 
@@ -183,9 +150,13 @@ pub const Program = struct {
                         try executeExpression(&rt, idx, &m.offset);
                         try executeExpression(&rt, idx, &e);
 
-                        const ref = try rt.popValueFunctionReference();
+                        const ref = try rt.popAnyReferenceValue();
 
-                        try i.setElement(seg.type, m.table, el_i, ref);
+                        if (std.meta.activeTag(ref) != seg.type) {
+                            return error.WrongSegmentType;
+                        }
+
+                        try i.setAnyElement(m.table, el_i, ref);
                     }
                 },
                 else => {
