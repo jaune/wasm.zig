@@ -323,7 +323,7 @@ pub fn logExpressionInstruction(expression: *const Expression, i: usize) void {
                 payload.function_type_index,
             });
         },
-        .branch => {
+        .branch, .branch_if => {
             const payload_index = e.payload_index.?;
             const payload = expression.branch_payloads[payload_index];
 

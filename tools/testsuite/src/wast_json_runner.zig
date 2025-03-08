@@ -208,7 +208,7 @@ fn assertReturn(allocator: std.mem.Allocator, program: *Program, mod_idx: module
 
     var rt = runtime.Runtime.init(program);
 
-    // std.log.info("_____ assert_return: {s}: {d}", .{ action.field, command.line });
+    std.log.info("_____ assert_return: {s}: {d}", .{ action.field, command.line });
 
     runtime.invokeFunction(allocator, &rt, mod_idx, fn_index, parameters, results) catch |err| {
         std.log.err("assert_return: {s}: {d}: error: {}", .{ action.field, command.line, err });

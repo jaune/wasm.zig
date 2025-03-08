@@ -95,10 +95,10 @@ pub const Runtime = struct {
 
         const values = self.value_stack.slice();
 
-        const expected_vstack_len = label.value_stack_length_at_push + function_type.results.len - function_type.parameters.len;
+        const min_vstack_len = label.value_stack_length_at_push + function_type.results.len - function_type.parameters.len;
 
-        if (self.value_stack.len != expected_vstack_len) {
-            std.log.err("AssertValueStackSize: expected={} given={}", .{ expected_vstack_len, self.value_stack.len });
+        if (self.value_stack.len < min_vstack_len) {
+            std.log.err("AssertValueStackSize: expected={} given={}", .{ min_vstack_len, self.value_stack.len });
             return error.AssertValueStackSize;
         }
 
@@ -125,11 +125,17 @@ pub const Runtime = struct {
     }
 
     pub fn branchFromLabelIndex(self: *Self, frame: *Frame, index: u16) !void {
-        const idx = std.math.cast(LabelStackLength, (self.label_stack.len - 1) - index) orelse {
-
-            // const idx = std.math.cast(LabelStackLength, frame.labels_start + index) orelse {
+        const i = std.math.cast(LabelStackLength, self.label_stack.len - index) orelse {
             return error.TooBig;
         };
+
+        if (i == frame.labels_start) {
+            self.label_stack.len = frame.labels_start;
+            frame.instruction_pointer = @intCast(frame.expression.instructions.len - 2);
+            return;
+        }
+
+        const idx = i - 1;
         const label = self.label_stack.get(idx);
 
         switch (label.kind) {
@@ -284,7 +290,7 @@ pub fn executeExpression(runtime: *Runtime, root_module_instance_index: ModuleIn
 
         const instruction = expression.instructions[current_frame.instruction_pointer];
 
-        // logExpressionInstruction(expression, current_frame.instruction_pointer);
+        logExpressionInstruction(expression, current_frame.instruction_pointer);
 
         switch (instruction.tag) {
             .nop => {
@@ -398,25 +404,32 @@ pub fn executeExpression(runtime: *Runtime, root_module_instance_index: ModuleIn
                 const function_type = module_instance.module.function_types[entry.function_type_index];
                 const expected_end = entry.frame.values_start + function_type.results.len;
 
-                if (expected_end != runtime.value_stack.len) {
-                    std.log.err("expected_end={}, given_end={}", .{ expected_end, runtime.value_stack.len });
-                    return error.WrongValueStackSize;
+                if (tag == .expression_end) {
+                    if (runtime.value_stack.len != expected_end) {
+                        std.log.err("expected_end={}, given_end={}", .{ expected_end, runtime.value_stack.len });
+                        return error.AssertValueStackSize;
+                    }
+                }
+                if (tag == .@"return") {
+                    if (runtime.value_stack.len < expected_end) {
+                        std.log.err("expected_end={}, given_end={}", .{ expected_end, runtime.value_stack.len });
+                        return error.AssertValueStackSize;
+                    }
                 }
 
-                for (function_type.results, entry.frame.values_start..) |result_type, i| {
-                    const value: Value = runtime.value_stack.get(i);
+                const vstack = runtime.value_stack.slice();
+                const results = vstack[(vstack.len - function_type.results.len)..vstack.len];
 
-                    if (result_type != std.meta.activeTag(value)) {
+                for (function_type.results, results) |result_type, result_value| {
+                    if (result_type != std.meta.activeTag(result_value)) {
                         return error.WrongResultType;
                     }
                 }
 
-                const value_stack_slice = runtime.value_stack.slice();
-
                 std.mem.copyForwards(
                     Value,
-                    value_stack_slice[entry.parameters_start..],
-                    value_stack_slice[entry.frame.values_start..(entry.frame.values_start + function_type.results.len)],
+                    vstack[entry.parameters_start..],
+                    results,
                 );
 
                 const results_length = std.math.cast(Runtime.ValueStackLength, function_type.results.len) orelse {

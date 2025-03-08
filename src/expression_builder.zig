@@ -104,7 +104,8 @@ pub const ExpressionBuilder = struct {
     }
 
     pub fn appendBranch(self: *Self, tag: InstructionTag, label_index: LabelIndex) !void {
-        if (label_index >= self.label_stack.items.len) {
+        if (label_index > self.label_stack.items.len) {
+            std.log.err("InvalidLabelIndex: label_index={}, self.label_stack.items.len={}", .{ label_index, self.label_stack.items.len });
             return error.InvalidLabelIndex;
         }
 
@@ -174,7 +175,7 @@ pub const ExpressionBuilder = struct {
                     return error.Unsupported;
                 },
             },
-            .payload_index = try castOrError(InstructionPayloadIndex, self.local_accessor_payloads.items.len),
+            .payload_index = try castOrError(InstructionPayloadIndex, self.global_accessor_payloads.items.len),
         });
         try self.global_accessor_payloads.append(.{
             .global_index = global_index,

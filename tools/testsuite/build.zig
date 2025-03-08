@@ -59,6 +59,8 @@ const base_filenames = [_][]const u8{
     "local_get",
     "block",
     "call",
+    "br",
+    "br_if",
     // "global",
 };
 
