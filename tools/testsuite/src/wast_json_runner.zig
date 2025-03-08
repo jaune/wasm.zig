@@ -208,7 +208,7 @@ fn assertReturn(allocator: std.mem.Allocator, program: *Program, mod_idx: module
 
     var rt = runtime.Runtime.init(program);
 
-    std.log.info("_____ assert_return: {s}: {d}", .{ action.field, command.line });
+    // std.log.info("_____ assert_return: {s}: {d}", .{ action.field, command.line });
 
     runtime.invokeFunction(allocator, &rt, mod_idx, fn_index, parameters, results) catch |err| {
         std.log.err("assert_return: {s}: {d}: error: {}", .{ action.field, command.line, err });
@@ -292,7 +292,7 @@ const JsonWast = struct {
                     const rv = try jv.toRuntimeValue();
 
                     switch (rv) {
-                        .i32, .i64 => {
+                        .i32, .i64, .extern_reference, .function_reference => {
                             return rv.eql(other);
                         },
                         .f32 => |f| {
@@ -349,7 +349,15 @@ const JsonWast = struct {
                     .i64 = @as(i64, @bitCast(parsed)),
                 };
             }
+            if (std.mem.eql(u8, self.type, "externref")) {
+                const parsed = try std.fmt.parseUnsigned(u32, self.value, 10);
 
+                return .{
+                    .extern_reference = @as(module.ExternReference, @truncate(parsed)),
+                };
+            }
+
+            std.log.err("UnsupportedValue: {}", .{self});
             return error.UnsupportedValue;
         }
     };

@@ -290,7 +290,7 @@ pub fn executeExpression(runtime: *Runtime, root_module_instance_index: ModuleIn
 
         const instruction = expression.instructions[current_frame.instruction_pointer];
 
-        logExpressionInstruction(expression, current_frame.instruction_pointer);
+        // logExpressionInstruction(expression, current_frame.instruction_pointer);
 
         switch (instruction.tag) {
             .nop => {
@@ -483,18 +483,14 @@ pub fn executeExpression(runtime: *Runtime, root_module_instance_index: ModuleIn
             },
 
             .branch_table => {
-                const active = try runtime.popValue(i32);
-
-                if (active < 0) {
-                    return error.BranchTableOutOfBounds;
-                }
-
                 const payload_index = instruction.payload_index orelse {
                     return error.NoPayloadIndex;
                 };
                 const payload = expression.branch_table_payloads[payload_index];
 
-                if (active < payload.branches.len) {
+                const active = try runtime.popValue(i32);
+
+                if (active >= 0 and active < payload.branches.len) {
                     const a = std.math.cast(usize, active) orelse {
                         return error.InvalidBranchIndex;
                     };

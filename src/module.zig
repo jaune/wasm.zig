@@ -153,6 +153,8 @@ pub const Value = union(ValueType) {
             .i64 => a.i64 == b.i64,
             .f32 => a.f32 == b.f32,
             .f64 => a.f64 == b.f64,
+            .extern_reference => a.extern_reference == b.extern_reference,
+            .function_reference => a.function_reference.function_index == b.function_reference.function_index and a.function_reference.module_instance_index == b.function_reference.module_instance_index,
             else => false,
         };
     }

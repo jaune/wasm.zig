@@ -61,6 +61,7 @@ const base_filenames = [_][]const u8{
     "call",
     "br",
     "br_if",
+    "br_table",
     // "global",
 };
 
