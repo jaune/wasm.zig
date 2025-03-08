@@ -536,6 +536,7 @@ pub fn executeExpression(runtime: *Runtime, root_module_instance_index: ModuleIn
                 const g = try runtime.popValue(i32);
 
                 const growth = std.math.cast(MemoryPageIndex, g) orelse {
+                    std.log.err("CastingError: {}", .{g});
                     return error.CastingError;
                 };
 

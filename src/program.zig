@@ -38,7 +38,7 @@ const TableInstance = struct {
 
     pub fn getAnyElement(self: *const Self, i: usize) !AnyReference {
         if (i >= self.elements.len) {
-            return error.OutOfBounds;
+            return error.UndefinedElement;
         }
 
         return self.elements[i];
@@ -53,7 +53,7 @@ const TableInstance = struct {
     }
 };
 
-const memory_page_size = 65536;
+const memory_page_size = 64 * 1024;
 
 const MemoryInstance = struct {
     limits: Limits,
@@ -196,17 +196,16 @@ pub const Program = struct {
     pub fn @"memory.grow"(self: *Self, module_instance_index: ModuleInstanceIndex, memory_instance_index: MemoryInstanceIndex, n_page: MemoryPageIndex) !MemoryPageIndex {
         const old_data = self.module_instances.buffer[module_instance_index].memories[memory_instance_index].data;
 
+        const old_size = std.math.cast(MemoryPageIndex, old_data.len / memory_page_size) orelse {
+            return error.CastingError;
+        };
         const new_size = old_data.len + (@as(usize, @intCast(n_page)) * memory_page_size);
 
         const new_data = try self.allocator.realloc(old_data, new_size);
 
         self.module_instances.buffer[module_instance_index].memories[memory_instance_index].data = new_data;
 
-        const new_page_size: usize = new_data.len / memory_page_size;
-
-        return std.math.cast(MemoryPageIndex, new_page_size - 1) orelse {
-            return error.CastingError;
-        };
+        return old_size;
     }
 
     pub fn @"i.store"(self: *Self, comptime T: type, module_instance_index: ModuleInstanceIndex, memory_instance_index: MemoryInstanceIndex, addr: u32, value: T) !void {

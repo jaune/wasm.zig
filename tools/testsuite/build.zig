@@ -58,6 +58,7 @@ const base_filenames = [_][]const u8{
     "conversions",
     "local_get",
     "block",
+    "call",
     // "global",
 };
 

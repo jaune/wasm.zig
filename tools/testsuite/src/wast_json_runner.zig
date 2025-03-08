@@ -164,11 +164,18 @@ fn errorFromText(text: []const u8) ?PanicError {
     if (std.mem.eql(u8, text, "invalid conversion to integer")) {
         return PanicError.InvalidCastToInt;
     }
-
+    if (std.mem.eql(u8, text, "undefined element")) {
+        return PanicError.UndefinedElement;
+    }
     return null;
 }
 
-const PanicError = error{ DivisionByZero, Overflow, InvalidCastToInt };
+const PanicError = error{
+    DivisionByZero,
+    Overflow,
+    InvalidCastToInt,
+    UndefinedElement,
+};
 
 fn assertReturn(allocator: std.mem.Allocator, program: *Program, mod_idx: module.ModuleInstanceIndex, command: *const JsonWast.Command) !void {
     const action: JsonWast.Action = command.action orelse {

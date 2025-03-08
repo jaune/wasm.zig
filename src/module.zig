@@ -5,7 +5,7 @@ pub const InstructionTag = @import("./instruction_tag.zig").InstructionTag;
 pub const max_module_instances = 10;
 pub const ModuleInstanceIndex: type = std.math.IntFittingRange(0, max_module_instances);
 
-pub const max_memory_pages = 128;
+pub const max_memory_pages = std.math.maxInt(i32);
 pub const MemoryPageIndex: type = std.math.IntFittingRange(0, max_memory_pages);
 
 pub const MemoryInstanceIndex = u16;
