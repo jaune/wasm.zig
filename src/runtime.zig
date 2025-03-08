@@ -17,6 +17,10 @@ const Limits = @import("./module.zig").Limits;
 const FunctionReference = @import("./module.zig").FunctionReference;
 const ModuleInstanceIndex = @import("./module.zig").ModuleInstanceIndex;
 const AnyReference = @import("./module.zig").AnyReference;
+const MemoryPageIndex = @import("./module.zig").MemoryPageIndex;
+
+const logExpression = @import("./module.zig").logExpression;
+const logExpressionInstruction = @import("./module.zig").logExpressionInstruction;
 
 pub const Program = @import("./program.zig").Program;
 
@@ -34,6 +38,7 @@ pub const Runtime = struct {
         instruction_pointer: u32,
         module_instance_index: ModuleInstanceIndex,
         labels_start: LabelStackLength,
+        values_start: ValueStackLength,
     };
 
     pub const CallStackEntry = struct {
@@ -42,7 +47,6 @@ pub const Runtime = struct {
         function_index: FunctionIndex,
         function_type_index: FunctionTypeTndex,
 
-        results_start: ValueStackLength,
         locals_start: ValueStackLength,
         parameters_start: ValueStackLength,
     };
@@ -74,6 +78,7 @@ pub const Runtime = struct {
     value_stack: ValueStackType = .{},
     label_stack: LabelStackType = .{},
     program: *Program,
+    current_frame: ?*Frame = null,
 
     pub fn init(program: *Program) Self {
         return .{
@@ -81,39 +86,62 @@ pub const Runtime = struct {
         };
     }
 
+    pub fn endBlock(self: *Self, frame: *Frame, label: LabelStackEntry) !void {
+        if (label.kind != .block) {
+            return error.WrongLabelPopped;
+        }
+
+        const function_type: FunctionType = try self.program.functionTypeFromIndex(frame.module_instance_index, label.function_type);
+
+        const values = self.value_stack.slice();
+
+        const expected_vstack_len = label.value_stack_length_at_push + function_type.results.len - function_type.parameters.len;
+
+        if (self.value_stack.len != expected_vstack_len) {
+            std.log.err("AssertValueStackSize: expected={} given={}", .{ expected_vstack_len, self.value_stack.len });
+            return error.AssertValueStackSize;
+        }
+
+        const results_source_start = self.value_stack.len - function_type.results.len;
+
+        for (function_type.results, values[results_source_start..]) |result, value| {
+            if (std.meta.activeTag(value) != result) {
+                std.log.err("AssertValueStackType: expected={} given={}", .{ result, std.meta.activeTag(value) });
+                return error.AssertValueStackType;
+            }
+        }
+
+        const results_destination_start = label.value_stack_length_at_push - function_type.parameters.len;
+
+        std.mem.copyForwards(
+            Value,
+            values[results_destination_start..],
+            values[results_source_start..self.value_stack.len],
+        );
+
+        self.value_stack.len = @as(Runtime.ValueStackLength, @intCast(results_destination_start + function_type.results.len));
+
+        frame.instruction_pointer = label.end;
+    }
+
     pub fn branchFromLabelIndex(self: *Self, frame: *Frame, index: u16) !void {
-        const idx = std.math.cast(LabelStackLength, frame.labels_start + index) orelse {
+        const idx = std.math.cast(LabelStackLength, (self.label_stack.len - 1) - index) orelse {
+
+            // const idx = std.math.cast(LabelStackLength, frame.labels_start + index) orelse {
             return error.TooBig;
         };
-        const l = self.label_stack.get(idx);
+        const label = self.label_stack.get(idx);
 
-        switch (l.kind) {
+        switch (label.kind) {
             .block => {
                 self.label_stack.len = idx;
-                frame.instruction_pointer = l.end;
+                try self.endBlock(frame, label);
             },
             .loop => {
                 self.label_stack.len = idx + 1;
-                frame.instruction_pointer = l.start;
+                frame.instruction_pointer = label.start;
             },
         }
-    }
-
-    pub fn getCurrentFrameResultsStart(self: *const Self) Runtime.ValueStackLength {
-        if (self.call_stack.len == 0) {
-            return 0;
-        }
-
-        const frame = self.call_stack.get(self.call_stack.len - 1);
-
-        return frame.results_start;
-    }
-
-    pub fn peekCurrentCall(self: *const Self) !CallStackEntry {
-        if (self.call_stack.len == 0) {
-            return error.EmptyCallStack;
-        }
-        return self.call_stack.get(self.call_stack.len - 1);
     }
 
     pub fn popLabel(self: *Self) !LabelStackEntry {
@@ -134,7 +162,19 @@ pub const Runtime = struct {
         };
     }
 
+    pub fn pushAnyValue(self: *Self, value: Value) !void {
+        try self.value_stack.append(value);
+    }
+
     pub fn popAnyValue(self: *Self) !Value {
+        const current_frame = self.current_frame orelse {
+            return error.NoFrame;
+        };
+
+        if (self.value_stack.len <= current_frame.values_start) {
+            return error.TryPopingLocals;
+        }
+
         const value: Value = self.value_stack.popOrNull() orelse {
             return error.ValueStackEmpty;
         };
@@ -142,14 +182,8 @@ pub const Runtime = struct {
         return value;
     }
 
-    pub fn pushAnyValue(self: *Self, value: Value) !void {
-        try self.value_stack.append(value);
-    }
-
     pub fn popAnyReferenceValue(self: *Self) !AnyReference {
-        const value: Value = self.value_stack.popOrNull() orelse {
-            return error.ValueStackEmpty;
-        };
+        const value: Value = try self.popAnyValue();
 
         return switch (value) {
             .function_reference => |r| .{ .function = r },
@@ -159,9 +193,7 @@ pub const Runtime = struct {
     }
 
     pub fn popValue(self: *Self, comptime T: type) !T {
-        const value: Value = self.value_stack.popOrNull() orelse {
-            return error.ValueStackEmpty;
-        };
+        const value: Value = try self.popAnyValue();
 
         return switch (T) {
             i32 => switch (value) {
@@ -233,11 +265,17 @@ pub fn executeExpression(runtime: *Runtime, root_module_instance_index: ModuleIn
         .expression = root_expression,
         .module_instance_index = root_module_instance_index,
         .labels_start = runtime.label_stack.len,
+        .values_start = runtime.value_stack.len,
     };
 
-    var current_frame: *Runtime.Frame = &root_frame;
+    runtime.current_frame = &root_frame;
+    // defer runtime.current_frame = null;
 
     interpreter_loop: while (true) {
+        const current_frame = runtime.current_frame orelse {
+            return error.NoFrame;
+        };
+
         const expression = current_frame.expression;
 
         if (current_frame.instruction_pointer >= expression.instructions.len) {
@@ -246,6 +284,8 @@ pub fn executeExpression(runtime: *Runtime, root_module_instance_index: ModuleIn
 
         const instruction = expression.instructions[current_frame.instruction_pointer];
 
+        // logExpressionInstruction(expression, current_frame.instruction_pointer);
+
         switch (instruction.tag) {
             .nop => {
                 // NOTE: Do nothing.
@@ -253,6 +293,7 @@ pub fn executeExpression(runtime: *Runtime, root_module_instance_index: ModuleIn
             },
 
             .@"unreachable" => {
+                logExpression(current_frame.expression);
                 return error.Unreachable;
             },
 
@@ -265,7 +306,7 @@ pub fn executeExpression(runtime: *Runtime, root_module_instance_index: ModuleIn
 
                 try pushCall(runtime, current_frame.module_instance_index, function_index);
 
-                current_frame = &runtime.call_stack.slice()[runtime.call_stack.len - 1].frame;
+                runtime.current_frame = &runtime.call_stack.slice()[runtime.call_stack.len - 1].frame;
             },
 
             .call_indirect => {
@@ -295,7 +336,7 @@ pub fn executeExpression(runtime: *Runtime, root_module_instance_index: ModuleIn
 
                 try pushCall(runtime, ref.module_instance_index, ref.function_index);
 
-                current_frame = &runtime.call_stack.slice()[runtime.call_stack.len - 1].frame;
+                runtime.current_frame = &runtime.call_stack.slice()[runtime.call_stack.len - 1].frame;
             },
 
             .block, .loop => |tag| {
@@ -332,26 +373,8 @@ pub fn executeExpression(runtime: *Runtime, root_module_instance_index: ModuleIn
             .block_end => {
                 const label = try runtime.popLabel();
 
-                if (label.kind != .block) {
-                    return error.WrongLabelPopped;
-                }
-
-                const module_instance_index = current_frame.module_instance_index;
-
-                const module_instance = runtime.program.module_instances.get(module_instance_index);
-                const function_type = module_instance.module.function_types[label.function_type];
-
-                const value_stack_slice = runtime.value_stack.slice();
-
-                std.mem.copyForwards(
-                    Value,
-                    value_stack_slice[label.value_stack_length_at_push..],
-                    value_stack_slice[(runtime.value_stack.len - function_type.results.len)..runtime.value_stack.len],
-                );
-
-                runtime.value_stack.len = label.value_stack_length_at_push + @as(Runtime.ValueStackLength, @intCast(function_type.results.len));
-
-                current_frame.instruction_pointer = label.end + 1;
+                try runtime.endBlock(current_frame, label);
+                current_frame.instruction_pointer += 1;
             },
 
             .@"return", .expression_end => |tag| {
@@ -373,14 +396,14 @@ pub fn executeExpression(runtime: *Runtime, root_module_instance_index: ModuleIn
 
                 const module_instance = runtime.program.module_instances.get(current_frame.module_instance_index);
                 const function_type = module_instance.module.function_types[entry.function_type_index];
-                const expected_end = entry.results_start + function_type.results.len;
+                const expected_end = entry.frame.values_start + function_type.results.len;
 
                 if (expected_end != runtime.value_stack.len) {
                     std.log.err("expected_end={}, given_end={}", .{ expected_end, runtime.value_stack.len });
                     return error.WrongValueStackSize;
                 }
 
-                for (function_type.results, entry.results_start..) |result_type, i| {
+                for (function_type.results, entry.frame.values_start..) |result_type, i| {
                     const value: Value = runtime.value_stack.get(i);
 
                     if (result_type != std.meta.activeTag(value)) {
@@ -393,7 +416,7 @@ pub fn executeExpression(runtime: *Runtime, root_module_instance_index: ModuleIn
                 std.mem.copyForwards(
                     Value,
                     value_stack_slice[entry.parameters_start..],
-                    value_stack_slice[entry.results_start..(entry.results_start + function_type.results.len)],
+                    value_stack_slice[entry.frame.values_start..(entry.frame.values_start + function_type.results.len)],
                 );
 
                 const results_length = std.math.cast(Runtime.ValueStackLength, function_type.results.len) orelse {
@@ -402,13 +425,13 @@ pub fn executeExpression(runtime: *Runtime, root_module_instance_index: ModuleIn
 
                 runtime.value_stack.len = entry.parameters_start + results_length;
 
-                if (runtime.call_stack.len == 0) {
-                    current_frame = &root_frame;
-                } else {
-                    current_frame = &runtime.call_stack.slice()[runtime.call_stack.len - 1].frame;
-                }
+                const new_current_frame = if (runtime.call_stack.len == 0)
+                    &root_frame
+                else
+                    &runtime.call_stack.slice()[runtime.call_stack.len - 1].frame;
 
-                current_frame.instruction_pointer += 1;
+                new_current_frame.instruction_pointer += 1;
+                runtime.current_frame = new_current_frame;
             },
 
             .branch => {
@@ -502,6 +525,121 @@ pub fn executeExpression(runtime: *Runtime, root_module_instance_index: ModuleIn
                 current_frame.instruction_pointer += 1;
             },
 
+            .@"memory.size" => {
+                const new_size = try runtime.program.@"memory.size"(current_frame.module_instance_index, 0);
+                try runtime.pushValue(i32, new_size);
+
+                current_frame.instruction_pointer += 1;
+            },
+
+            .@"memory.grow" => {
+                const g = try runtime.popValue(i32);
+
+                const growth = std.math.cast(MemoryPageIndex, g) orelse {
+                    return error.CastingError;
+                };
+
+                const new_size: i32 = runtime.program.@"memory.grow"(current_frame.module_instance_index, 0, growth) catch -1;
+
+                try runtime.pushValue(i32, new_size);
+
+                current_frame.instruction_pointer += 1;
+            },
+
+            .@"global.set" => {
+                const payload_index = instruction.payload_index orelse {
+                    return error.NoPayloadIndex;
+                };
+                const payload = expression.global_accessor_payloads[payload_index];
+                const value = try runtime.popAnyValue();
+
+                try runtime.program.@"global.set"(current_frame.module_instance_index, payload.global_index, value);
+
+                current_frame.instruction_pointer += 1;
+            },
+
+            .@"global.get" => {
+                const payload_index = instruction.payload_index orelse {
+                    return error.NoPayloadIndex;
+                };
+                const payload = expression.global_accessor_payloads[payload_index];
+                const value = try runtime.program.@"global.get"(current_frame.module_instance_index, payload.global_index);
+
+                try runtime.pushAnyValue(value);
+
+                current_frame.instruction_pointer += 1;
+            },
+
+            inline .@"i32.load", .@"i64.load", .@"f32.load", .@"f64.load", .@"i32.load8_s", .@"i32.load8_u", .@"i32.load16_s", .@"i32.load16_u", .@"i64.load8_s", .@"i64.load8_u", .@"i64.load16_s", .@"i64.load16_u", .@"i64.load32_s", .@"i64.load32_u" => |tag| {
+                const payload_index = instruction.payload_index orelse {
+                    return error.NoPayloadIndex;
+                };
+                const payload = expression.memory_accessor_payloads[payload_index];
+
+                const V: type = comptime switch (tag) {
+                    .@"i32.load" => i32,
+                    .@"i64.load" => i64,
+                    .@"f32.load" => f32,
+                    .@"f64.load" => f64,
+                    .@"i32.load8_s" => i32,
+                    .@"i32.load8_u" => i32,
+                    .@"i32.load16_s" => i32,
+                    .@"i32.load16_u" => i32,
+                    .@"i64.load8_s" => i64,
+                    .@"i64.load8_u" => i64,
+                    .@"i64.load16_s" => i64,
+                    .@"i64.load16_u" => i64,
+                    .@"i64.load32_s" => i64,
+                    .@"i64.load32_u" => i64,
+                    else => @compileError("Unsupported type tag=" ++ tag),
+                };
+
+                const o = try runtime.popValue(i32);
+
+                const offset = std.math.cast(u32, o) orelse {
+                    return error.CastingError;
+                };
+                const addr = (payload.offset + offset);
+
+                const value = try runtime.program.@"i.load"(V, current_frame.module_instance_index, 0, addr);
+
+                try runtime.pushValue(V, value);
+
+                current_frame.instruction_pointer += 1;
+            },
+
+            inline .@"i32.store", .@"i64.store", .@"f32.store", .@"f64.store", .@"i32.store8", .@"i32.store16", .@"i64.store8", .@"i64.store16", .@"i64.store32" => |tag| {
+                const payload_index = instruction.payload_index orelse {
+                    return error.NoPayloadIndex;
+                };
+                const payload = expression.memory_accessor_payloads[payload_index];
+
+                const V: type = comptime switch (tag) {
+                    .@"i32.store" => i32,
+                    .@"i64.store" => i64,
+                    .@"f32.store" => f32,
+                    .@"f64.store" => f64,
+                    .@"i32.store8" => i32,
+                    .@"i32.store16" => i32,
+                    .@"i64.store8" => i64,
+                    .@"i64.store16" => i64,
+                    .@"i64.store32" => i64,
+                    else => @compileError("Unsupported type tag=" ++ tag),
+                };
+
+                const v = try runtime.popValue(V);
+                const o = try runtime.popValue(i32);
+
+                const offset = std.math.cast(u32, o) orelse {
+                    return error.CastingError;
+                };
+                const addr = (payload.offset + offset);
+
+                try runtime.program.@"i.store"(V, current_frame.module_instance_index, 0, addr, v);
+
+                current_frame.instruction_pointer += 1;
+            },
+
             inline .@"local.get", .@"local.set", .@"local.tee" => |tag| {
                 const payload_index = instruction.payload_index orelse {
                     return error.NoPayloadIndex;
@@ -515,17 +653,12 @@ pub fn executeExpression(runtime: *Runtime, root_module_instance_index: ModuleIn
                 current_frame.instruction_pointer += 1;
             },
 
-            inline .@"global.get", .@"global.set" => |tag| {
-                const payload_index = instruction.payload_index orelse {
-                    return error.NoPayloadIndex;
-                };
-                const payload = expression.global_accessor_payloads[payload_index];
+            .@"ref.null function" => {
+                return error.UnsupportedInstruction;
+            },
 
-                const tag_name = comptime @tagName(tag);
-                const func = comptime @field(InstructionFunctions, tag_name);
-
-                _ = try @call(.auto, func, .{ runtime, payload.global_index });
-                current_frame.instruction_pointer += 1;
+            .@"ref.null extern" => {
+                return error.UnsupportedInstruction;
             },
 
             inline else => |tag| {
@@ -549,15 +682,21 @@ pub fn pushCall(runtime: *Runtime, mi_idx: ModuleInstanceIndex, function_index: 
         return error.TooBig;
     };
     const locals_length = try computeLocalLength(function_body.locals);
-    const current_results_start = runtime.getCurrentFrameResultsStart();
 
-    if ((current_results_start + parameters_length) > runtime.value_stack.len) {
+    const frame = runtime.current_frame orelse {
+        return error.NoFrame;
+    };
+
+    const expected_vstack_len = frame.values_start + parameters_length;
+
+    if (runtime.value_stack.len < expected_vstack_len) {
+        std.log.err("MissingParamaterOnStack: {} < {}", .{ runtime.value_stack.len, expected_vstack_len });
         return error.MissingParamaterOnStack;
     }
 
     const parameters_start = runtime.value_stack.len - parameters_length;
     const locals_start = parameters_start + parameters_length;
-    const results_start = locals_start + locals_length;
+    const values_start = locals_start + locals_length;
 
     for (function_type.parameters, runtime.value_stack.slice()[parameters_start..]) |pt, v| {
         try v.assertValueType(pt);
@@ -569,7 +708,7 @@ pub fn pushCall(runtime: *Runtime, mi_idx: ModuleInstanceIndex, function_index: 
 
     try pushLocals(runtime, function_body.locals);
 
-    if (results_start != runtime.value_stack.len) {
+    if (values_start != runtime.value_stack.len) {
         return error.AssertValueStackSize;
     }
 
@@ -579,28 +718,16 @@ pub fn pushCall(runtime: *Runtime, mi_idx: ModuleInstanceIndex, function_index: 
             .module_instance_index = mi_idx,
             .expression = &function_body.expression,
             .labels_start = runtime.label_stack.len,
+            .values_start = values_start,
         },
         .function_index = function_index,
         .function_type_index = function_type_index,
         .parameters_start = parameters_start,
         .locals_start = locals_start,
-        .results_start = results_start,
     });
 }
 
 const ExpressionBuilder = @import("./expression_builder.zig").ExpressionBuilder;
-
-fn createInvokeExpression(allocator: std.mem.Allocator, function_index: FunctionIndex) !Expression {
-    var builder: ExpressionBuilder = ExpressionBuilder.init(allocator);
-    defer builder.deinit();
-
-    try builder.appendCall(.{
-        .function_index = function_index,
-    });
-    try builder.appendEnd();
-
-    return try builder.build(allocator);
-}
 
 pub fn invokeFunction(allocator: std.mem.Allocator, runtime: *Runtime, root_module_instance_index: ModuleInstanceIndex, function_index: u32, parameters: []const Value, results: []Value) !void {
     // std.log.debug("invokeFunction fn={}", .{function_index});
@@ -616,54 +743,26 @@ pub fn invokeFunction(allocator: std.mem.Allocator, runtime: *Runtime, root_modu
         return error.WrongNumberOfResults;
     }
 
-    for (function_type.parameters, 0..) |p, i| {
-        switch (p) {
-            .i32 => {
-                const value = switch (parameters[i]) {
-                    .i32 => |v| v,
-                    else => {
-                        return error.InvalidParameterType;
-                    },
-                };
-                try runtime.pushValue(i32, value);
-            },
-            .i64 => {
-                const value = switch (parameters[i]) {
-                    .i64 => |v| v,
-                    else => {
-                        return error.InvalidParameterType;
-                    },
-                };
-                try runtime.pushValue(i64, value);
-            },
-            .f32 => {
-                const value = switch (parameters[i]) {
-                    .f32 => |v| v,
-                    else => {
-                        return error.InvalidParameterType;
-                    },
-                };
-                try runtime.pushValue(f32, value);
-            },
-            .f64 => {
-                const value = switch (parameters[i]) {
-                    .f64 => |v| v,
-                    else => {
-                        return error.InvalidParameterType;
-                    },
-                };
-                try runtime.pushValue(f64, value);
-            },
-            else => {
-                return error.UnsupportedParameterType;
-            },
+    var builder: ExpressionBuilder = ExpressionBuilder.init(allocator);
+    defer builder.deinit();
+
+    for (function_type.parameters, parameters) |pt, p| {
+        if (std.meta.activeTag(p) == pt) {
+            try builder.appendConst(p);
+        } else {
+            return error.InvalidParameterType;
         }
     }
 
-    var root_expression = try createInvokeExpression(allocator, function_index);
-    defer root_expression.free(allocator);
+    try builder.appendCall(.{
+        .function_index = function_index,
+    });
+    try builder.appendEnd();
 
-    try executeExpression(runtime, root_module_instance_index, &root_expression);
+    var invoke_expression = try builder.build(allocator);
+    defer invoke_expression.free(allocator);
+
+    try executeExpression(runtime, root_module_instance_index, &invoke_expression);
 
     if (runtime.value_stack.len != function_type.results.len) {
         return error.MissingResult;
@@ -720,10 +819,19 @@ fn computeLocalLength(locals: []Local) !Runtime.ValueStackLength {
 pub fn logRuntime(runtime: *const Runtime) void {
     std.log.info("+++++ Runtime", .{});
 
+    std.log.info("current_frame:", .{});
+    if (runtime.current_frame) |frame| {
+        std.log.info("  labels_start: {}", .{frame.labels_start});
+        std.log.info("  values_start: {}", .{frame.values_start});
+    } else {
+        std.log.info("<null>", .{});
+    }
+
     std.log.info("call stack:", .{});
 
     for (runtime.call_stack.slice(), 0..) |c, i| {
-        std.log.info("  {d}: {}", .{ i, c });
+        std.log.info("  {d}: values_start={}", .{ i, c.frame.values_start });
+        // std.log.info("  {d}: {}", .{ i, c });
     }
 
     std.log.info("label stack:", .{});
@@ -733,8 +841,8 @@ pub fn logRuntime(runtime: *const Runtime) void {
     }
     std.log.info("value stack:", .{});
 
-    for (runtime.value_stack.slice(), 0..) |c, i| {
-        std.log.info("  {d}: {}", .{ i, c });
+    for (runtime.value_stack.slice(), 0..) |v, i| {
+        std.log.info("  {d}: {}", .{ i, v });
     }
 
     std.log.info("+++++", .{});

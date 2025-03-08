@@ -48,22 +48,24 @@ pub fn main() !void {
 
     std.log.info("wast_path: {s}", .{input_parsed.value.source_filename});
 
-    var current_module: ?module.Module = null;
-    errdefer {
-        if (current_module) |*mod| {
-            mod.deinit();
+    var modules = try std.BoundedArray(*module.Module, 10).init(0);
+    defer {
+        for (modules.slice()) |m| {
+            m.deinit();
+            allocator.destroy(m);
         }
     }
+
+    var program = runtime.Program.init(allocator);
+    defer program.deinit();
+
+    var current_module_index: ?module.ModuleInstanceIndex = null;
 
     for (input_parsed.value.commands) |command| {
         if (std.mem.eql(u8, command.type, "module")) {
             const filename = command.filename orelse {
                 return error.ModuleFilenameMissing;
             };
-
-            if (current_module) |*mod| {
-                mod.deinit();
-            }
 
             const file_path = try std.fs.path.join(allocator, &.{ input_dir, filename });
             defer allocator.free(file_path);
@@ -75,38 +77,38 @@ pub fn main() !void {
 
             const reader = file.reader();
 
-            const mod = try BinaryModuleReader.readAllAlloc(allocator, reader);
+            const mod = try allocator.create(module.Module);
 
-            current_module = mod;
+            mod.* = try BinaryModuleReader.readAllAlloc(allocator, reader);
+
+            try modules.append(mod);
+
+            current_module_index = try program.instantiateModule(mod);
         } else if (std.mem.eql(u8, command.type, "assert_return")) {
-            const mod = current_module orelse {
+            const mod_idx = current_module_index orelse {
                 return error.NoModule;
             };
 
-            assertReturn(allocator, &mod, &command) catch |err| {
+            assertReturn(allocator, &program, mod_idx, &command) catch |err| {
                 std.log.err("command fail: line={d}", .{command.line});
                 return err;
             };
         } else if (std.mem.eql(u8, command.type, "assert_trap")) {
-            const mod = current_module orelse {
+            const mod_idx = current_module_index orelse {
                 return error.NoModule;
             };
 
-            assertTrap(allocator, &mod, &command) catch |err| {
+            assertTrap(allocator, &program, mod_idx, &command) catch |err| {
                 std.log.err("command fail: line={d}", .{command.line});
                 return err;
             };
         }
     }
 
-    if (current_module) |*mod| {
-        mod.deinit();
-    }
-
     std.log.info("all tests passed", .{});
 }
 
-fn assertTrap(allocator: std.mem.Allocator, mod: *const module.Module, command: *const JsonWast.Command) !void {
+fn assertTrap(allocator: std.mem.Allocator, program: *Program, mod_idx: module.ModuleInstanceIndex, command: *const JsonWast.Command) !void {
     const action: JsonWast.Action = command.action orelse {
         return error.ActionMissing;
     };
@@ -118,6 +120,8 @@ fn assertTrap(allocator: std.mem.Allocator, mod: *const module.Module, command: 
     if (!std.mem.eql(u8, action.type, "invoke")) {
         return error.UnsupportedAction;
     }
+
+    const mod = program.module_instances.get(mod_idx).module;
 
     const fn_index = mod.findExportedFunctionIndex(action.field) orelse {
         return error.MissingExportedFunction;
@@ -140,12 +144,7 @@ fn assertTrap(allocator: std.mem.Allocator, mod: *const module.Module, command: 
         return error.MissingErrorFromText;
     };
 
-    var program = runtime.Program.init(allocator);
-    defer program.deinit();
-
-    const mod_idx = try program.instantiateModule(mod);
-
-    var rt = runtime.Runtime.init(&program);
+    var rt = runtime.Runtime.init(program);
 
     runtime.invokeFunction(allocator, &rt, mod_idx, fn_index, parameters, results) catch |given| {
         if (given != expected) {
@@ -171,7 +170,7 @@ fn errorFromText(text: []const u8) ?PanicError {
 
 const PanicError = error{ DivisionByZero, Overflow, InvalidCastToInt };
 
-fn assertReturn(allocator: std.mem.Allocator, mod: *const module.Module, command: *const JsonWast.Command) !void {
+fn assertReturn(allocator: std.mem.Allocator, program: *Program, mod_idx: module.ModuleInstanceIndex, command: *const JsonWast.Command) !void {
     const action: JsonWast.Action = command.action orelse {
         return error.ActionMissing;
     };
@@ -184,6 +183,7 @@ fn assertReturn(allocator: std.mem.Allocator, mod: *const module.Module, command
     }
 
     // std.log.info("assert_return: {d}", .{command.line});
+    const mod = program.module_instances.get(mod_idx).module;
 
     const fn_index = mod.findExportedFunctionIndex(action.field) orelse {
         return error.NoFunction;
@@ -199,12 +199,9 @@ fn assertReturn(allocator: std.mem.Allocator, mod: *const module.Module, command
     const results = try allocator.alloc(runtime.Value, expected.len);
     defer allocator.free(results);
 
-    var program = runtime.Program.init(allocator);
-    defer program.deinit();
+    var rt = runtime.Runtime.init(program);
 
-    const mod_idx = try program.instantiateModule(mod);
-
-    var rt = runtime.Runtime.init(&program);
+    // std.log.info("_____ assert_return: {s}: {d}", .{ action.field, command.line });
 
     runtime.invokeFunction(allocator, &rt, mod_idx, fn_index, parameters, results) catch |err| {
         std.log.err("assert_return: {s}: {d}: error: {}", .{ action.field, command.line, err });

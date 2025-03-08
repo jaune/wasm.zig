@@ -5,6 +5,11 @@ pub const InstructionTag = @import("./instruction_tag.zig").InstructionTag;
 pub const max_module_instances = 10;
 pub const ModuleInstanceIndex: type = std.math.IntFittingRange(0, max_module_instances);
 
+pub const max_memory_pages = 128;
+pub const MemoryPageIndex: type = std.math.IntFittingRange(0, max_memory_pages);
+
+pub const MemoryInstanceIndex = u16;
+
 pub const FunctionReference = struct {
     module_instance_index: ModuleInstanceIndex,
     function_index: FunctionIndex,
@@ -127,7 +132,7 @@ pub const Value = union(ValueType) {
     f32: f32,
     f64: f64,
 
-    v128: void,
+    v128,
 
     function_reference: FunctionReference,
     extern_reference: ExternReference,
@@ -285,42 +290,58 @@ pub const Mutability = enum {
     variable,
 };
 
+pub fn logExpressionInstruction(expression: *const Expression, i: usize) void {
+    const e = expression.instructions[i];
+
+    switch (e.tag) {
+        .@"n.const" => {
+            const payload_index = e.payload_index.?;
+            const payload = expression.constant_payloads[payload_index];
+
+            std.log.info("{}: {s} (value={})", .{ i, @tagName(e.tag), payload.value });
+        },
+        .@"if" => {
+            const payload_index = e.payload_index.?;
+            const payload = expression.if_payloads[payload_index];
+
+            std.log.info("{}: {s} (true={} false={})", .{
+                i,
+                @tagName(e.tag),
+                payload.true,
+                payload.false,
+            });
+        },
+        .block => {
+            const payload_index = e.payload_index.?;
+            const payload = expression.label_payloads[payload_index];
+
+            std.log.info("{}: {s} (start={} end={} function_type_index={})", .{
+                i,
+                @tagName(e.tag),
+                payload.start,
+                payload.end,
+                payload.function_type_index,
+            });
+        },
+        .branch => {
+            const payload_index = e.payload_index.?;
+            const payload = expression.branch_payloads[payload_index];
+
+            std.log.info("{}: {s} (label_index={})", .{
+                i,
+                @tagName(e.tag),
+                payload.label_index,
+            });
+        },
+        else => {
+            std.log.info("{}: {s}", .{ i, @tagName(e.tag) });
+        },
+    }
+}
+
 pub fn logExpression(expression: *const Expression) void {
-    for (expression.instructions, 0..) |e, i| {
-        switch (e.tag) {
-            .@"n.const" => {
-                const payload_index = e.payload_index.?;
-                const payload = expression.constant_payloads[payload_index];
-
-                std.log.info("{}: {s} (value={})", .{ i, @tagName(e.tag), payload.value });
-            },
-            .@"if" => {
-                const payload_index = e.payload_index.?;
-                const payload = expression.if_payloads[payload_index];
-
-                std.log.info("{}: {s} (true={} false={})", .{
-                    i,
-                    @tagName(e.tag),
-                    payload.true,
-                    payload.false,
-                });
-            },
-            .block => {
-                const payload_index = e.payload_index.?;
-                const payload = expression.label_payloads[payload_index];
-
-                std.log.info("{}: {s} (start={} end={} function_type_index={})", .{
-                    i,
-                    @tagName(e.tag),
-                    payload.start,
-                    payload.end,
-                    payload.function_type_index,
-                });
-            },
-            else => {
-                std.log.info("{}: {s}", .{ i, @tagName(e.tag) });
-            },
-        }
+    for (0..expression.instructions.len) |i| {
+        logExpressionInstruction(expression, i);
     }
 }
 

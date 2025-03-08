@@ -29,8 +29,6 @@ const CallPayload = @import("./module.zig").CallPayload;
 const CallIndirectPayload = @import("./module.zig").CallIndirectPayload;
 const MemoryAccessorPayload = @import("./module.zig").MemoryAccessorPayload;
 
-const logExpression = @import("./module.zig").logExpression;
-
 const ValueTypeCode = enum(u8) {
     i32 = 0x7F,
     i64 = 0x7E,
@@ -355,6 +353,15 @@ fn readExpression(allocator: std.mem.Allocator, reader: FileReader, function_typ
                     }, global_index);
                 },
 
+                .@"ref.null" => {
+                    const t = try readReferenceType(reader);
+
+                    try builder.appendTag(switch (t) {
+                        .function => .@"ref.null function",
+                        .@"extern" => .@"ref.null extern",
+                    });
+                },
+
                 else => {
                     std.log.err("UnhandledOpcode: opcode={}", .{opcode});
                     return error.UnhandledOpcode;
@@ -538,8 +545,8 @@ fn readFunctionTypeSection(allocator: std.mem.Allocator, reader: Reader) !Functi
         .results = &.{},
     };
 
-    inline for (std.meta.fields(ValueType), 0..) |f, i| {
-        function_types[count + 1 + i] = FunctionType{
+    inline for (std.meta.fields(ValueType), 1..) |f, i| {
+        function_types[count + i] = FunctionType{
             .parameters = &.{},
             .results = try allocResultTypeFromValueType(allocator, @enumFromInt(f.value)),
         };

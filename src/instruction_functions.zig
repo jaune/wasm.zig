@@ -6,16 +6,25 @@ const std = @import("std");
 const math = @import("./math.zig");
 
 pub fn @"local.get"(runtime: *Runtime, localidx: u32) !void {
-    const frame = try runtime.peekCurrentCall();
-    const value_stack_index = frame.parameters_start + localidx;
+    if (runtime.call_stack.len == 0) {
+        return error.EmptyCallStack;
+    }
 
-    if (value_stack_index >= frame.results_start) {
+    const entry = &runtime.call_stack.slice()[runtime.call_stack.len - 1];
+    const value_stack_index = entry.parameters_start + localidx;
+
+    if (value_stack_index >= entry.frame.values_start) {
+        return error.AssertLocalIndex;
+    }
+
+    if (value_stack_index >= runtime.value_stack.len) {
+        std.log.debug("local.get: {} >= {}", .{ value_stack_index, runtime.value_stack.len });
         return error.AssertLocalIndex;
     }
 
     const value = runtime.value_stack.get(value_stack_index);
 
-    try runtime.value_stack.append(value);
+    try runtime.pushAnyValue(value);
 }
 
 pub fn @"local.set"(runtime: *Runtime, localidx: u32) !void {
@@ -23,10 +32,16 @@ pub fn @"local.set"(runtime: *Runtime, localidx: u32) !void {
         return error.EmptyCallStack;
     }
 
-    const frame = &runtime.call_stack.slice()[runtime.call_stack.len - 1];
-    const value_stack_index = frame.parameters_start + localidx;
+    const entry = &runtime.call_stack.slice()[runtime.call_stack.len - 1];
+    const value_stack_index = entry.parameters_start + localidx;
 
-    if (value_stack_index >= frame.results_start) {
+    if (value_stack_index >= entry.frame.values_start) {
+        return error.AssertLocalIndex;
+    }
+
+    if (value_stack_index >= runtime.value_stack.len) {
+        std.log.debug("ocal.set: {} >= {}", .{ value_stack_index, runtime.value_stack.len });
+
         return error.AssertLocalIndex;
     }
 
@@ -34,24 +49,14 @@ pub fn @"local.set"(runtime: *Runtime, localidx: u32) !void {
 }
 
 pub fn @"local.tee"(runtime: *Runtime, localidx: u32) !void {
-    _ = runtime;
-    _ = localidx;
+    if (runtime.call_stack.len == 0) {
+        return error.EmptyCallStack;
+    }
 
-    return error.NotImplementedYet;
-}
+    const frame = &runtime.call_stack.slice()[runtime.call_stack.len - 1];
+    const value_stack_index = frame.parameters_start + localidx;
 
-pub fn @"global.get"(runtime: *Runtime, globalidx: u32) !void {
-    _ = runtime;
-    _ = globalidx;
-
-    return error.NotImplementedYet;
-}
-
-pub fn @"global.set"(runtime: *Runtime, globalidx: u32) !void {
-    _ = runtime;
-    _ = globalidx;
-
-    return error.NotImplementedYet;
+    runtime.value_stack.slice()[value_stack_index] = runtime.value_stack.get(runtime.value_stack.len - 1);
 }
 
 pub fn @"i32.const"(runtime: *Runtime, value: i32) !void {
@@ -738,106 +743,6 @@ pub fn @"table.get"(runtime: *Runtime) !void {
     return error.NotImplementedYet;
 }
 pub fn @"table.set"(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
-}
-pub fn @"i32.load"(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
-}
-pub fn @"i64.load"(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
-}
-pub fn @"f32.load"(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
-}
-pub fn @"f64.load"(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
-}
-pub fn @"i32.load8_s"(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
-}
-pub fn @"i32.load8_u"(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
-}
-pub fn @"i32.load16_s"(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
-}
-pub fn @"i32.load16_u"(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
-}
-pub fn @"i64.load8_s"(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
-}
-pub fn @"i64.load8_u"(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
-}
-pub fn @"i64.load16_s"(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
-}
-pub fn @"i64.load16_u"(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
-}
-pub fn @"i64.load32_s"(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
-}
-pub fn @"i64.load32_u"(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
-}
-pub fn @"i32.store"(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
-}
-pub fn @"i64.store"(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
-}
-pub fn @"f32.store"(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
-}
-pub fn @"f64.store"(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
-}
-pub fn @"i32.store8"(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
-}
-pub fn @"i32.store16"(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
-}
-pub fn @"i64.store8"(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
-}
-pub fn @"i64.store16"(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
-}
-pub fn @"i64.store32"(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
-}
-pub fn @"memory.size"(runtime: *Runtime) !void {
-    _ = runtime;
-    return error.NotImplementedYet;
-}
-pub fn @"memory.grow"(runtime: *Runtime) !void {
     _ = runtime;
     return error.NotImplementedYet;
 }
